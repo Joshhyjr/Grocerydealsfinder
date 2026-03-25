@@ -25,6 +25,7 @@ import {
 } from '../components/ui/dialog';
 import { ArrowLeft, Trash2, ShoppingCart, Calendar, Clock, Play, Moon, Sun } from 'lucide-react';
 import { useGrocery } from '../context/GroceryContext';
+import { normalizePostalCode } from '../data/api';
 import { toast } from 'sonner';
 
 export function SavedListsPage() {
@@ -45,7 +46,7 @@ export function SavedListsPage() {
       const list = savedLists.find(l => l.id === selectedList);
       if (list) {
         loadList(list);
-        navigate(`/results?budget=${budget}&postalCode=${postalCode}`);
+        navigate(`/results?budget=${budget}&postalCode=${normalizePostalCode(postalCode)}`);
         toast.success(`Running "${list.name}" list`);
       }
     }
@@ -207,7 +208,7 @@ export function SavedListsPage() {
               <label className="text-sm">Postal Code</label>
               <Input
                 type="text"
-                placeholder="e.g., 10001"
+                placeholder="e.g., B3K 9Z0"
                 value={postalCode}
                 onChange={(e) => setPostalCode(e.target.value)}
                 maxLength={10}

@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
 import { ShoppingCart, X, Search, BookMarked, DollarSign, List as ListIcon, BarChart3, MapPin as MapPinIcon, Moon, Sun } from 'lucide-react';
 import { useGrocery } from '../context/GroceryContext';
-import { searchGroceryItems } from '../data/groceryData';
+import { fetchSuggestions, normalizePostalCode } from '../data/api';
 
 export function HomePage() {
   const navigate = useNavigate();
@@ -14,13 +14,11 @@ export function HomePage() {
   const [postalCode, setPostalCode] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
 
   const handleSearchChange = (value: string) => {
     setSearchQuery(value);
-    if (value.trim()) {
-      const results = searchGroceryItems(value);
-      setSuggestions(results.map(item => item.name).slice(0, 5));
-    } else {
+    if (!value.trim()) {
       setSuggestions([]);
     }
   };
@@ -44,9 +42,38 @@ export function HomePage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (budget && postalCode && currentList.length > 0) {
-      navigate(`/results?budget=${budget}&postalCode=${postalCode}`);
+      navigate(`/results?budget=${budget}&postalCode=${normalizePostalCode(postalCode)}`);
     }
   };
+
+  // Live backend suggestions make the input reflect the same product catalogue
+  // that powers the final comparison results instead of the old mock dataset.
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        setIsLoadingSuggestions(true);
+        const nextSuggestions = await fetchSuggestions(searchQuery, postalCode, controller.signal);
+        setSuggestions(nextSuggestions);
+      } catch (error) {
+        // Ignore aborts because they are expected while the user is still typing.
+        if (!(error instanceof DOMException && error.name === 'AbortError')) {
+          setSuggestions([]);
+        }
+      } finally {
+        setIsLoadingSuggestions(false);
+      }
+    }, 250);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeoutId);
+    };
+  }, [searchQuery, postalCode]);
 
   return (
     <div className="min-h-screen bg-white dark:bg-gray-900 transition-colors">
@@ -128,7 +155,7 @@ export function HomePage() {
                   <label className="text-sm text-gray-700 dark:text-gray-300 mb-2 block">Postal Code</label>
                   <Input
                     type="text"
-                    placeholder="M5V 3L9"
+                    placeholder="B3K 9Z0"
                     value={postalCode}
                     onChange={(e) => setPostalCode(e.target.value)}
                     maxLength={10}
@@ -163,6 +190,9 @@ export function HomePage() {
                         </button>
                       ))}
                     </div>
+                  )}
+                  {isLoadingSuggestions && (
+                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">Loading live suggestions...</p>
                   )}
                 </div>
 

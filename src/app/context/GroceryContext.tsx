@@ -20,7 +20,18 @@ interface GroceryContextType {
 const GroceryContext = createContext<GroceryContextType | undefined>(undefined);
 
 export function GroceryProvider({ children }: { children: ReactNode }) {
-  const [currentList, setCurrentList] = useState<string[]>([]);
+  const [currentList, setCurrentList] = useState<string[]>(() => {
+    const stored = localStorage.getItem('currentGroceryList');
+    if (!stored) {
+      return [];
+    }
+
+    try {
+      return JSON.parse(stored);
+    } catch {
+      return [];
+    }
+  });
   const [savedLists, setSavedLists] = useState<SavedGroceryList[]>([]);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     const stored = localStorage.getItem('darkMode');
@@ -43,6 +54,12 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     localStorage.setItem('savedGroceryLists', JSON.stringify(savedLists));
   }, [savedLists]);
+
+  // Persist the active list so results pages can survive refreshes while
+  // the frontend is now fetching live data from the backend API.
+  useEffect(() => {
+    localStorage.setItem('currentGroceryList', JSON.stringify(currentList));
+  }, [currentList]);
 
   // Apply dark mode class to document and save to localStorage
   useEffect(() => {

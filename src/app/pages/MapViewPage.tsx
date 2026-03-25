@@ -1,59 +1,62 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router';
-import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
-import { ArrowLeft, List, ShoppingCart, Check, X, Moon, Sun } from 'lucide-react';
+import { ArrowLeft, List, ShoppingCart, Check, X, Moon, Sun, LoaderCircle, MapPin } from 'lucide-react';
 import { useGrocery } from '../context/GroceryContext';
-import { getStoresByPostalCode, calculateBasketTotal } from '../data/groceryData';
-import L from 'leaflet';
-
-// Fix for default marker icons in react-leaflet
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-});
+import { BasketResponseData, fetchBasketResults, normalizePostalCode } from '../data/api';
 
 export function MapViewPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { currentList, isDarkMode, toggleDarkMode } = useGrocery();
-  const postalCode = searchParams.get('postalCode') || '';
+  const postalCode = normalizePostalCode(searchParams.get('postalCode') || 'B3K9Z0');
   const budget = searchParams.get('budget') || '100';
 
-  const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
+  const [selectedStore, setSelectedStore] = useState<string | null>(null);
+  const [basketData, setBasketData] = useState<BasketResponseData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const storesInArea = getStoresByPostalCode(postalCode);
+  // This page now uses the live backend too. The current backend does not yet
+  // expose precise store coordinates, so the page acts as a live store explorer
+  // until geographic metadata is added to the API.
+  useEffect(() => {
+    if (currentList.length === 0) {
+      setBasketData(null);
+      setIsLoading(false);
+      setError('Add at least one grocery item before opening the store explorer.');
+      return;
+    }
 
-  // Calculate basket for each store
-  const storeResults = storesInArea.map(store => {
-    const basket = calculateBasketTotal(store, currentList);
-    return {
-      store,
-      basket,
-      hasAllItems: basket.availableCount === currentList.length,
-      matchPercentage: Math.round((basket.availableCount / currentList.length) * 100),
-    };
-  });
+    const controller = new AbortController();
 
-  // Calculate center of map based on stores
-  const centerLat = storesInArea.length > 0
-    ? storesInArea.reduce((sum, store) => sum + store.coordinates.lat, 0) / storesInArea.length
-    : 40.7128;
-  const centerLng = storesInArea.length > 0
-    ? storesInArea.reduce((sum, store) => sum + store.coordinates.lng, 0) / storesInArea.length
-    : -74.0060;
+    async function loadBasket() {
+      try {
+        setIsLoading(true);
+        setError(null);
+        const response = await fetchBasketResults(currentList, postalCode, controller.signal);
+        setBasketData(response);
+        setSelectedStore(response.stores[0]?.store ?? null);
+      } catch (nextError) {
+        if (!(nextError instanceof DOMException && nextError.name === 'AbortError')) {
+          setBasketData(null);
+          setError(nextError instanceof Error ? nextError.message : 'Failed to load store explorer data.');
+        }
+      } finally {
+        setIsLoading(false);
+      }
+    }
 
-  const selectedStore = selectedStoreId
-    ? storeResults.find(r => r.store.id === selectedStoreId)
-    : null;
+    loadBasket();
+    return () => controller.abort();
+  }, [currentList, postalCode]);
+
+  const selectedStoreData = basketData?.stores.find((store) => store.store === selectedStore) ?? null;
 
   return (
     <div className="min-h-screen bg-white dark:bg-gray-900 transition-colors">
-      {/* Header */}
       <header className="border-b dark:border-gray-700">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
@@ -90,164 +93,119 @@ export function MapViewPage() {
 
       <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-          {/* Stores List */}
           <div className="lg:col-span-1 space-y-4">
             <div>
-              <h2 className="text-2xl mb-2 dark:text-white">Nearby Stores</h2>
-              <p className="text-sm text-gray-600 dark:text-gray-400">{storesInArea.length} stores found</p>
+              <h2 className="text-2xl mb-2 dark:text-white">Store Explorer</h2>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Live comparison data for {postalCode}</p>
             </div>
+
+            {isLoading && (
+              <div className="flex items-center text-sm text-gray-600 dark:text-gray-400">
+                <LoaderCircle className="size-4 mr-2 animate-spin" />
+                Loading stores...
+              </div>
+            )}
+
+            {!isLoading && error && (
+              <Card className="dark:bg-gray-800 dark:border-gray-700">
+                <CardContent className="p-4 text-sm text-gray-600 dark:text-gray-300">{error}</CardContent>
+              </Card>
+            )}
 
             <div className="space-y-3">
-              {storesInArea.length === 0 ? (
-                <p className="text-sm text-gray-600 dark:text-gray-400">No stores found in this postal code.</p>
-              ) : (
-                storeResults.map(result => (
-                  <Card
-                    key={result.store.id}
-                    className={`cursor-pointer transition-all hover:shadow-md dark:bg-gray-800 ${
-                      selectedStoreId === result.store.id ? 'border-2 border-green-600' : 'dark:border-gray-700'
-                    }`}
-                    onClick={() => setSelectedStoreId(result.store.id)}
-                  >
-                    <CardContent className="p-4">
-                      <h3 className="mb-1 dark:text-white">{result.store.name}</h3>
-                      <p className="text-xs text-gray-600 dark:text-gray-400 mb-3">{result.store.address}</p>
-                      <div className="flex items-center gap-2">
-                        <Badge variant="secondary" className="text-xs dark:bg-gray-700 dark:text-gray-300">
-                          ${result.basket.total.toFixed(2)}
-                        </Badge>
-                        {result.hasAllItems ? (
-                          <Badge className="text-xs bg-green-600">All items</Badge>
-                        ) : (
-                          <Badge variant="outline" className="text-xs dark:border-gray-600 dark:text-gray-400">
-                            {result.basket.availableCount}/{currentList.length} items
-                          </Badge>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))
-              )}
+              {basketData?.stores.map((store) => (
+                <Card
+                  key={store.store}
+                  className={`cursor-pointer transition-all hover:shadow-md dark:bg-gray-800 ${
+                    selectedStore === store.store ? 'border-2 border-green-600' : 'dark:border-gray-700'
+                  }`}
+                  onClick={() => setSelectedStore(store.store)}
+                >
+                  <CardContent className="p-4">
+                    <h3 className="mb-1 dark:text-white">{store.store}</h3>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge variant="secondary" className="text-xs dark:bg-gray-700 dark:text-gray-300">
+                        {store.total_cost_str}
+                      </Badge>
+                      <Badge variant="outline" className="text-xs dark:border-gray-600 dark:text-gray-400">
+                        {store.available_count}/{currentList.length} items
+                      </Badge>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
+          </div>
 
-            {selectedStore && (
-              <Card className="border-green-600 dark:bg-gray-800">
-                <CardContent className="p-4">
-                  <h3 className="mb-3 dark:text-white">{selectedStore.store.name}</h3>
-                  <div className="mb-4">
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Total Price</p>
-                    <p className="text-2xl text-green-600">${selectedStore.basket.total.toFixed(2)}</p>
-                    {selectedStore.basket.savings > 0 && (
-                      <p className="text-xs text-green-600">Save ${selectedStore.basket.savings.toFixed(2)}</p>
-                    )}
+          <div className="lg:col-span-3 space-y-6">
+            <Card className="dark:bg-gray-800 dark:border-gray-700">
+              <CardContent className="p-8">
+                <div className="flex items-start gap-4">
+                  <div className="size-14 rounded-2xl bg-green-50 dark:bg-green-900/40 flex items-center justify-center shrink-0">
+                    <MapPin className="size-7 text-green-600" />
+                  </div>
+                  <div>
+                    <h3 className="text-2xl mb-2 dark:text-white">Live pricing is connected</h3>
+                    <p className="text-gray-600 dark:text-gray-400 mb-3">
+                      The frontend is now using the FastAPI backend for real basket totals, item availability, and store ranking.
+                    </p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      The current backend response does not include store latitude/longitude yet, so this page shows a live store explorer instead of exact map markers.
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {selectedStoreData && (
+              <Card className="dark:bg-gray-800 dark:border-gray-700">
+                <CardContent className="p-6">
+                  <div className="flex items-start justify-between gap-4 mb-6">
+                    <div>
+                      <h3 className="text-2xl dark:text-white">{selectedStoreData.store}</h3>
+                      <p className="text-sm text-gray-600 dark:text-gray-400">
+                        {selectedStoreData.available_count} available, {selectedStoreData.missing_count} missing
+                      </p>
+                    </div>
+                    <Badge className="bg-green-600 text-white">{selectedStoreData.total_cost_str}</Badge>
                   </div>
 
-                  <div className="border-t dark:border-gray-700 pt-3">
-                    <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
-                      {selectedStore.basket.availableCount} of {currentList.length} items available
-                    </p>
-                    <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                      {selectedStore.basket.items.map((item, index) => (
-                        <div
-                          key={index}
-                          className="flex items-center justify-between text-xs"
-                        >
-                          <div className="flex items-center gap-1.5">
-                            {item.available ? (
-                              <Check className="size-3 text-green-600" />
+                  <div className="space-y-3">
+                    {currentList.map((itemName) => {
+                      const match = selectedStoreData.breakdown.find((item) => item.item.toLowerCase() === itemName.toLowerCase());
+                      const isAvailable = Boolean(match);
+
+                      return (
+                        <div key={`${selectedStoreData.store}-${itemName}`} className="flex items-center justify-between gap-3 border-b dark:border-gray-700 pb-3 last:border-b-0">
+                          <div className="flex items-start gap-3">
+                            {isAvailable ? (
+                              <Check className="size-4 text-green-600 mt-0.5" />
                             ) : (
-                              <X className="size-3 text-gray-400" />
+                              <X className="size-4 text-red-500 mt-0.5" />
                             )}
-                            <span className={item.available ? 'dark:text-gray-300' : 'line-through text-gray-400'}>
-                              {item.name}
-                            </span>
+                            <div>
+                              <p className={isAvailable ? 'dark:text-white' : 'text-gray-400 line-through'}>
+                                {match?.name || itemName}
+                              </p>
+                              {match?.unit_price && (
+                                <p className="text-xs text-gray-500 dark:text-gray-400">{match.unit_price}</p>
+                              )}
+                            </div>
                           </div>
-                          {item.available && (
-                            <span className="text-green-700 dark:text-green-500">${item.price.toFixed(2)}</span>
-                          )}
+                          <span className={isAvailable ? 'dark:text-white' : 'text-gray-400'}>
+                            {match?.price_str || '—'}
+                          </span>
                         </div>
-                      ))}
-                    </div>
+                      );
+                    })}
                   </div>
                 </CardContent>
               </Card>
             )}
           </div>
-
-          {/* Map */}
-          <div className="lg:col-span-3">
-            <Card className="overflow-hidden dark:bg-gray-800 dark:border-gray-700">
-              <CardContent className="p-0">
-                {storesInArea.length === 0 ? (
-                  <div className="h-[600px] flex items-center justify-center bg-gray-50 dark:bg-gray-800">
-                    <div className="text-center">
-                      <ShoppingCart className="size-16 mx-auto mb-4 text-gray-400" />
-                      <p className="text-gray-600 dark:text-gray-400">No stores to display on map</p>
-                      <p className="text-sm text-gray-500 dark:text-gray-500 mt-2">Try a different postal code</p>
-                    </div>
-                  </div>
-                ) : (
-                  <MapContainer
-                    center={[centerLat, centerLng]}
-                    zoom={13}
-                    style={{ height: '700px', width: '100%' }}
-                  >
-                    <TileLayer
-                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    />
-                    {storeResults.map(result => (
-                      <Marker
-                        key={result.store.id}
-                        position={[result.store.coordinates.lat, result.store.coordinates.lng]}
-                        eventHandlers={{
-                          click: () => setSelectedStoreId(result.store.id),
-                        }}
-                      >
-                        <Popup>
-                          <div className="p-2 min-w-[200px]">
-                            <h3 className="mb-2">{result.store.name}</h3>
-                            <p className="text-sm text-gray-600 mb-3">{result.store.address}</p>
-                            
-                            <div className="space-y-2 mb-3">
-                              <div className="flex justify-between text-sm">
-                                <span>Total:</span>
-                                <span className="text-green-600">${result.basket.total.toFixed(2)}</span>
-                              </div>
-                              <div className="flex justify-between text-sm">
-                                <span>Items available:</span>
-                                <span>{result.basket.availableCount} / {currentList.length}</span>
-                              </div>
-                              {result.basket.savings > 0 && (
-                                <div className="flex justify-between text-sm">
-                                  <span>Savings:</span>
-                                  <span className="text-green-600">${result.basket.savings.toFixed(2)}</span>
-                                </div>
-                              )}
-                            </div>
-
-                            {result.hasAllItems ? (
-                              <Badge className="w-full justify-center bg-green-600">
-                                All items available
-                              </Badge>
-                            ) : (
-                              <Badge variant="outline" className="w-full justify-center">
-                                {result.matchPercentage}% match
-                              </Badge>
-                            )}
-                          </div>
-                        </Popup>
-                      </Marker>
-                    ))}
-                  </MapContainer>
-                )}
-              </CardContent>
-            </Card>
-          </div>
         </div>
       </div>
 
-      {/* Footer */}
       <footer className="border-t dark:border-gray-700 py-6 mt-12">
         <div className="max-w-7xl mx-auto px-6">
           <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-400">
