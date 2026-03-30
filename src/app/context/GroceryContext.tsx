@@ -12,6 +12,8 @@ interface GroceryContextType {
   saveList: (name: string, items: string[]) => void;
   deleteList: (id: string) => void;
   loadList: (list: SavedGroceryList) => void;
+  addItemToSavedList: (listId: string, item: string) => boolean;
+  removeItemFromSavedList: (listId: string, item: string) => void;
 
   isDarkMode: boolean;
   toggleDarkMode: () => void;
@@ -35,7 +37,17 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
   const [savedLists, setSavedLists] = useState<SavedGroceryList[]>([]);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     const stored = localStorage.getItem('darkMode');
-    return stored ? JSON.parse(stored) : false;
+    // New visitors should land in dark mode, but an explicit stored choice
+    // still wins so we do not flip returning users back unexpectedly.
+    if (!stored) {
+      return true;
+    }
+
+    try {
+      return JSON.parse(stored);
+    } catch {
+      return true;
+    }
   });
 
   // Load saved lists from localStorage on mount
@@ -114,6 +126,49 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
     );
   };
 
+  const addItemToSavedList = (listId: string, item: string) => {
+    const trimmed = item.trim();
+    if (!trimmed) {
+      return false;
+    }
+
+    let didAdd = false;
+    setSavedLists((prev) =>
+      prev.map((list) => {
+        if (list.id !== listId) {
+          return list;
+        }
+
+        const alreadyExists = list.items.some((savedItem) => savedItem.toLowerCase() === trimmed.toLowerCase());
+        if (alreadyExists) {
+          return list;
+        }
+
+        didAdd = true;
+        // Saved list edits are intentionally isolated from the active working
+        // list so results-page changes never overwrite a saved template silently.
+        return { ...list, items: [...list.items, trimmed] };
+      }),
+    );
+
+    return didAdd;
+  };
+
+  const removeItemFromSavedList = (listId: string, item: string) => {
+    setSavedLists((prev) =>
+      prev.map((list) => {
+        if (list.id !== listId) {
+          return list;
+        }
+
+        return {
+          ...list,
+          items: list.items.filter((savedItem) => savedItem !== item),
+        };
+      }),
+    );
+  };
+
   return (
     <GroceryContext.Provider
       value={{
@@ -126,6 +181,8 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
         saveList,
         deleteList,
         loadList,
+        addItemToSavedList,
+        removeItemFromSavedList,
         isDarkMode,
         toggleDarkMode,
       }}

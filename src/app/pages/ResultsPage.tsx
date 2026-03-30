@@ -13,7 +13,7 @@ import {
   DialogTrigger,
   DialogFooter,
 } from '../components/ui/dialog';
-import { ArrowLeft, ShoppingCart, Check, X, MapPin, Save, Moon, Sun, LoaderCircle, AlertCircle } from 'lucide-react';
+import { ArrowLeft, ShoppingCart, Check, X, MapPin, Save, Moon, Sun, LoaderCircle, AlertCircle, Navigation } from 'lucide-react';
 import { useGrocery } from '../context/GroceryContext';
 import { BasketResponseData, BasketStoreResult, fetchBasketResults, normalizePostalCode } from '../data/api';
 import { toast } from 'sonner';
@@ -21,7 +21,7 @@ import { toast } from 'sonner';
 export function ResultsPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { currentList, saveList, isDarkMode, toggleDarkMode } = useGrocery();
+  const { currentList, removeItem, saveList, isDarkMode, toggleDarkMode } = useGrocery();
   const budget = parseFloat(searchParams.get('budget') || '0');
   const postalCode = normalizePostalCode(searchParams.get('postalCode') || 'B3K9Z0');
 
@@ -64,6 +64,20 @@ export function ResultsPage() {
   }, [currentList, postalCode]);
 
   const sortedResults = useMemo(() => basketData?.stores ?? [], [basketData]);
+  const visibleResults = useMemo(() => {
+    // Keep the best deal visible even when it falls outside the preferred
+    // drive window so the user can still see if a longer trip is worth it.
+    return sortedResults.filter((storeResult) => storeResult.is_best_price || storeResult.is_within_drive_window);
+  }, [sortedResults]);
+  const cheapestStore = useMemo(() => {
+    return visibleResults.reduce<BasketStoreResult | null>((bestStore, storeResult) => {
+      if (!bestStore || storeResult.total_cost < bestStore.total_cost) {
+        return storeResult;
+      }
+      return bestStore;
+    }, null);
+  }, [visibleResults]);
+  const nearestStore = visibleResults[0] ?? null;
 
   const handleSaveList = () => {
     if (listName.trim()) {
@@ -95,6 +109,13 @@ export function ResultsPage() {
       unitPrice: null,
     };
   }
+
+  const handleRemoveActiveItem = (itemName: string) => {
+    // Results-page list edits are intentionally scoped to the active comparison.
+    // Saved lists only change when the user explicitly saves again.
+    removeItem(itemName);
+    toast.success(`Removed "${itemName}" from this comparison`);
+  };
 
   return (
     <div className="min-h-screen bg-white dark:bg-gray-900 transition-colors">
@@ -198,39 +219,98 @@ export function ResultsPage() {
           <>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
               <Card className="p-5 dark:bg-gray-800 dark:border-gray-700">
-                <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Stores Compared</p>
-                <p className="text-3xl dark:text-white">{basketData.total_stores}</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Nearest Store</p>
+                <p className="text-2xl dark:text-white">{nearestStore?.store ?? 'Unavailable'}</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+                  {nearestStore?.distance_km != null
+                    ? `${nearestStore.distance_km.toFixed(1)} km away`
+                    : nearestStore?.address ?? 'Distance unavailable'}
+                </p>
               </Card>
               <Card className="p-5 dark:bg-gray-800 dark:border-gray-700">
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Best Basket</p>
-                <p className="text-3xl text-green-600">{sortedResults[0]?.total_cost_str ?? '$0.00'}</p>
+                <p className="text-3xl text-green-600">{cheapestStore?.total_cost_str ?? '$0.00'}</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+                  {cheapestStore?.store ?? 'No stores available'}
+                </p>
               </Card>
               <Card className="p-5 dark:bg-gray-800 dark:border-gray-700">
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Budget Status</p>
-                <p className={`text-3xl ${sortedResults[0] && sortedResults[0].total_cost <= budget ? 'text-green-600' : 'text-amber-500'}`}>
-                  {sortedResults[0] && sortedResults[0].total_cost <= budget ? 'Within' : 'Over'}
+                <p className={`text-3xl ${cheapestStore && cheapestStore.total_cost <= budget ? 'text-green-600' : 'text-amber-500'}`}>
+                  {cheapestStore && cheapestStore.total_cost <= budget ? 'Within' : 'Over'}
                 </p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">{visibleResults.length} stores shown</p>
               </Card>
             </div>
 
+            <p className="mb-6 text-sm text-gray-500 dark:text-gray-400">
+              Showing stores within about 20 minutes of {postalCode}, plus the best overall deal if it is farther away.
+            </p>
+
+            <Card className="p-5 mb-8 dark:bg-gray-800 dark:border-gray-700">
+              <div className="flex items-start justify-between gap-4 mb-4">
+                <div>
+                  <h2 className="text-xl dark:text-white">Active Shopping List</h2>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    Remove items here to rerun the live basket without touching your saved templates.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {currentList.map((itemName) => (
+                  <Badge
+                    key={itemName}
+                    className="bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-800 px-3 py-1.5"
+                  >
+                    {itemName}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveActiveItem(itemName)}
+                      className="ml-2 hover:text-green-900 dark:hover:text-green-100"
+                      aria-label={`Remove ${itemName} from active shopping list`}
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+            </Card>
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {sortedResults.map((storeResult, index) => {
-                const isBestPrice = index === 0;
-                const extraCost = storeResult.total_cost - (sortedResults[0]?.total_cost ?? storeResult.total_cost);
+              {visibleResults.map((storeResult) => {
+                const extraCost = storeResult.total_cost - (cheapestStore?.total_cost ?? storeResult.total_cost);
 
                 return (
                   <Card
-                    key={storeResult.store}
-                    className={`p-6 dark:bg-gray-800 ${isBestPrice ? 'border-2 border-green-600' : 'border dark:border-gray-700'}`}
+                    key={storeResult.store_id ?? storeResult.store}
+                    className={`p-6 dark:bg-gray-800 ${storeResult.is_nearest ? 'border-2 border-green-600' : 'border dark:border-gray-700'}`}
                   >
                     <div className="mb-4">
                       <div className="flex items-start justify-between gap-3 mb-2">
                         <h3 className="text-xl dark:text-white">{storeResult.store}</h3>
-                        {isBestPrice && <Badge className="bg-green-600 text-white">Best Price</Badge>}
+                        <div className="flex flex-wrap gap-2 justify-end">
+                          {storeResult.is_nearest && <Badge className="bg-green-600 text-white">Nearest</Badge>}
+                          {storeResult.is_best_price && <Badge variant="secondary">Best Price</Badge>}
+                        </div>
                       </div>
                       <p className="text-sm text-gray-500 dark:text-gray-400">
                         {storeResult.available_count} of {currentList.length} items available
                       </p>
+                      <div className="mt-2 space-y-1 text-sm text-gray-500 dark:text-gray-400">
+                        <p className="flex items-center gap-2">
+                          <Navigation className="size-4" />
+                          {storeResult.distance_km != null
+                            ? `${storeResult.distance_km.toFixed(1)} km from ${basketData.region ?? 'your search area'}`
+                            : 'Distance unavailable'}
+                        </p>
+                        {storeResult.address && (
+                          <p className="flex items-center gap-2">
+                            <MapPin className="size-4" />
+                            {storeResult.address}
+                          </p>
+                        )}
+                      </div>
                     </div>
 
                     <div className="space-y-3 mb-6">
@@ -267,7 +347,7 @@ export function ResultsPage() {
                           <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Total</p>
                           <p className="text-2xl dark:text-white">{storeResult.total_cost_str}</p>
                         </div>
-                        {!isBestPrice && extraCost > 0 && (
+                        {!storeResult.is_best_price && extraCost > 0 && (
                           <div className="text-right">
                             <p className="text-sm text-amber-600">+${extraCost.toFixed(2)} vs best</p>
                           </div>

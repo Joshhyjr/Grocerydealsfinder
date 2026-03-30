@@ -23,18 +23,27 @@ import {
   DialogTitle,
   DialogFooter,
 } from '../components/ui/dialog';
-import { ArrowLeft, Trash2, ShoppingCart, Calendar, Clock, Play, Moon, Sun } from 'lucide-react';
+import { ArrowLeft, Trash2, ShoppingCart, Calendar, Clock, Play, Moon, Sun, Plus, X } from 'lucide-react';
 import { useGrocery } from '../context/GroceryContext';
 import { normalizePostalCode } from '../data/api';
 import { toast } from 'sonner';
 
 export function SavedListsPage() {
   const navigate = useNavigate();
-  const { savedLists, deleteList, loadList, isDarkMode, toggleDarkMode } = useGrocery();
+  const {
+    savedLists,
+    deleteList,
+    loadList,
+    addItemToSavedList,
+    removeItemFromSavedList,
+    isDarkMode,
+    toggleDarkMode,
+  } = useGrocery();
   const [runDialogOpen, setRunDialogOpen] = useState(false);
   const [selectedList, setSelectedList] = useState<string | null>(null);
   const [budget, setBudget] = useState('');
   const [postalCode, setPostalCode] = useState('');
+  const [listDrafts, setListDrafts] = useState<Record<string, string>>({});
 
   const handleRunList = (listId: string) => {
     setSelectedList(listId);
@@ -56,6 +65,28 @@ export function SavedListsPage() {
     const list = savedLists.find(l => l.id === listId);
     deleteList(listId);
     toast.success(`List "${list?.name}" deleted`);
+  };
+
+  const handleDraftChange = (listId: string, value: string) => {
+    setListDrafts((prev) => ({ ...prev, [listId]: value }));
+  };
+
+  const handleAddSavedItem = (listId: string) => {
+    const draftValue = listDrafts[listId] ?? '';
+    const didAdd = addItemToSavedList(listId, draftValue);
+
+    if (didAdd) {
+      setListDrafts((prev) => ({ ...prev, [listId]: '' }));
+      toast.success('Item added to saved list');
+      return;
+    }
+
+    toast.error('Enter a new item that is not already on this list.');
+  };
+
+  const handleRemoveSavedItem = (listId: string, item: string) => {
+    removeItemFromSavedList(listId, item);
+    toast.success(`Removed "${item}" from saved list`);
   };
 
   return (
@@ -150,10 +181,51 @@ export function SavedListsPage() {
 
                   <div className="flex flex-wrap gap-2 mb-4 max-h-32 overflow-y-auto">
                     {list.items.map((item, index) => (
-                      <Badge key={index} variant="secondary" className="text-xs dark:bg-gray-700 dark:text-gray-300">
+                      <Badge
+                        key={index}
+                        variant="secondary"
+                        className="text-xs dark:bg-gray-700 dark:text-gray-300 pr-1"
+                      >
                         {item}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSavedItem(list.id, item)}
+                          className="ml-2 rounded-full p-0.5 hover:bg-gray-200 dark:hover:bg-gray-600"
+                          aria-label={`Remove ${item} from ${list.name}`}
+                        >
+                          <X className="size-3" />
+                        </button>
                       </Badge>
                     ))}
+                  </div>
+
+                  <div className="mb-4">
+                    {/* Saved-list edits stay local to the template until the user
+                        explicitly loads the list, which keeps active comparisons predictable. */}
+                    <label className="text-sm text-gray-600 dark:text-gray-400 mb-2 block">Add Item</label>
+                    <div className="flex gap-2">
+                      <Input
+                        type="text"
+                        placeholder="e.g., Milk"
+                        value={listDrafts[list.id] ?? ''}
+                        onChange={(e) => handleDraftChange(list.id, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleAddSavedItem(list.id);
+                          }
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => handleAddSavedItem(list.id)}
+                        className="shrink-0"
+                      >
+                        <Plus className="size-4 mr-2" />
+                        Add
+                      </Button>
+                    </div>
                   </div>
 
                   <div className="space-y-2 text-sm text-gray-600 dark:text-gray-400 mb-4">
