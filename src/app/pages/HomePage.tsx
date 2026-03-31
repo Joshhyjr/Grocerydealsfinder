@@ -1,79 +1,74 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
-import { ShoppingCart, X, Search, BookMarked, DollarSign, List as ListIcon, BarChart3, MapPin as MapPinIcon, Moon, Sun } from 'lucide-react';
+import { Textarea } from '../components/ui/textarea';
+import { ShoppingCart, X, Search, BookMarked, DollarSign, List as ListIcon, BarChart3, MapPin as MapPinIcon, Moon, Sun, Plus, Minus } from 'lucide-react';
 import { useGrocery } from '../context/GroceryContext';
-import { fetchSuggestions, normalizePostalCode } from '../data/api';
+import { useLocationInput } from '../hooks/useLocationInput';
+import { buildLocationSearchParams } from '../data/location';
+import { toast } from 'sonner';
 
 export function HomePage() {
   const navigate = useNavigate();
-  const { currentList, addItem, removeItem, isDarkMode, toggleDarkMode } = useGrocery();
+  const {
+    currentList,
+    addItem,
+    removeItem,
+    incrementItemQuantity,
+    decrementItemQuantity,
+    activeLocation,
+    setActiveLocation,
+    isDarkMode,
+    toggleDarkMode,
+  } = useGrocery();
   const [budget, setBudget] = useState('');
-  const [postalCode, setPostalCode] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+  const {
+    locationInput,
+    setLocationInput,
+    isResolvingLocation,
+    resolveLocation,
+    useCurrentLocation,
+  } = useLocationInput(activeLocation?.input ?? '');
 
-  const handleSearchChange = (value: string) => {
-    setSearchQuery(value);
-    if (!value.trim()) {
-      setSuggestions([]);
-    }
-  };
-
-  const handleAddItem = (itemName?: string) => {
-    const item = itemName || searchQuery;
-    if (item.trim()) {
-      addItem(item);
-      setSearchQuery('');
-      setSuggestions([]);
-    }
-  };
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleAddItem();
-    }
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (budget && postalCode && currentList.length > 0) {
-      navigate(`/results?budget=${budget}&postalCode=${normalizePostalCode(postalCode)}`);
-    }
-  };
-
-  // Live backend suggestions make the input reflect the same product catalogue
-  // that powers the final comparison results instead of the old mock dataset.
-  useEffect(() => {
-    if (!searchQuery.trim()) {
+  const handleAddItems = () => {
+    const nextItems = parseMultiItemInput(searchQuery);
+    if (nextItems.length === 0) {
       return;
     }
 
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(async () => {
-      try {
-        setIsLoadingSuggestions(true);
-        const nextSuggestions = await fetchSuggestions(searchQuery, postalCode, controller.signal);
-        setSuggestions(nextSuggestions);
-      } catch (error) {
-        // Ignore aborts because they are expected while the user is still typing.
-        if (!(error instanceof DOMException && error.name === 'AbortError')) {
-          setSuggestions([]);
-        }
-      } finally {
-        setIsLoadingSuggestions(false);
-      }
-    }, 250);
+    nextItems.forEach((item) => addItem(item));
+    setSearchQuery('');
+    toast.success(`${nextItems.length} ${nextItems.length === 1 ? 'item' : 'items'} added to your list`);
+  };
 
-    return () => {
-      controller.abort();
-      window.clearTimeout(timeoutId);
-    };
-  }, [searchQuery, postalCode]);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!budget || !locationInput || currentList.length === 0) {
+      return;
+    }
+
+    try {
+      const location = await resolveLocation();
+      setActiveLocation(location);
+      navigate(`/results?${buildLocationSearchParams(budget, location).toString()}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to resolve that location right now.');
+    }
+  };
+
+  const handleUseCurrentLocation = async () => {
+    try {
+      const location = await useCurrentLocation();
+      setActiveLocation(location);
+      toast.success('Using your current location.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to use your current location right now.');
+    }
+  };
 
   return (
     <div className="min-h-screen bg-white dark:bg-gray-900 transition-colors">
@@ -117,12 +112,12 @@ export function HomePage() {
               <span className="text-green-600">starts here</span>
             </h1>
             <p className="text-gray-600 dark:text-gray-400 text-lg mb-8">
-              Enter your budget, postal code, and grocery list — we'll show you which nearby stores have the lowest total basket price.
+              Enter your budget, address or postal code, and grocery list. We&apos;ll show you which nearby stores have the lowest total basket price.
             </p>
             <Button
               className="bg-green-600 hover:bg-green-700 text-white px-6"
               onClick={() => {
-                if (!budget || !postalCode) {
+                if (!budget || !locationInput) {
                   const budgetInput = document.getElementById('budget');
                   budgetInput?.scrollIntoView({ behavior: 'smooth', block: 'center' });
                   budgetInput?.focus();
@@ -152,62 +147,84 @@ export function HomePage() {
                   />
                 </div>
                 <div>
-                  <label className="text-sm text-gray-700 dark:text-gray-300 mb-2 block">Postal Code</label>
+                  <label className="text-sm text-gray-700 dark:text-gray-300 mb-2 block">Address or Postal Code</label>
                   <Input
+                    id="location"
                     type="text"
-                    placeholder="B3K 9Z0"
-                    value={postalCode}
-                    onChange={(e) => setPostalCode(e.target.value)}
-                    maxLength={10}
+                    placeholder="123 Main St Halifax or B3H 2Y7"
+                    value={locationInput}
+                    onChange={(e) => setLocationInput(e.target.value)}
                     required
                     className="bg-white dark:bg-gray-700 dark:text-white"
                   />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleUseCurrentLocation}
+                    disabled={isResolvingLocation}
+                    className="mt-3 w-full border-green-200 text-green-700 hover:bg-green-50 dark:border-green-800 dark:text-green-300 dark:hover:bg-green-950"
+                  >
+                    <MapPinIcon className="size-4" />
+                    {isResolvingLocation ? 'Finding your location...' : 'Use My Location'}
+                  </Button>
                 </div>
               </div>
 
               <div>
                 <label className="text-sm text-gray-700 dark:text-gray-300 mb-2 block">Your Grocery List</label>
-                <div className="relative mb-3">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-gray-400" />
-                  <Input
-                    type="text"
-                    placeholder="Type to add items (e.g., Chicken, Milk, Eggs)..."
+                <div className="mb-3 space-y-3">
+                  <Textarea
+                    placeholder={'Add one or many items at once.\nExample:\nMilk\nEggs\nBananas, Chicken Breast'}
                     value={searchQuery}
-                    onChange={(e) => handleSearchChange(e.target.value)}
-                    onKeyPress={handleKeyPress}
-                    className="pl-10 bg-white dark:bg-gray-700 dark:text-white"
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="min-h-28 bg-white dark:bg-gray-700 dark:text-white"
                   />
-                  {suggestions.length > 0 && (
-                    <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-700 border dark:border-gray-600 rounded-lg shadow-lg z-10 max-h-48 overflow-y-auto">
-                      {suggestions.map((suggestion, index) => (
-                        <button
-                          key={index}
-                          type="button"
-                          className="w-full text-left px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-600 text-sm dark:text-white"
-                          onClick={() => handleAddItem(suggestion)}
-                        >
-                          {suggestion}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {isLoadingSuggestions && (
-                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">Loading live suggestions...</p>
-                  )}
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    Separate items with commas or new lines. Re-adding the same item increases its quantity.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleAddItems}
+                    disabled={parseMultiItemInput(searchQuery).length === 0}
+                  >
+                    Add Items
+                  </Button>
                 </div>
 
                 {currentList.length > 0 && (
                   <div className="flex flex-wrap gap-2 mb-4">
-                    {currentList.map((item, index) => (
+                    {currentList.map((item) => (
                       <Badge
-                        key={index}
+                        key={item.name}
                         className="bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-800 px-3 py-1.5"
                       >
-                        {item}
+                        <span>{item.name}</span>
+                        <span className="ml-2 rounded-full bg-white/70 px-2 py-0.5 text-xs dark:bg-gray-900/60">
+                          x{item.quantity}
+                        </span>
                         <button
                           type="button"
-                          onClick={() => removeItem(item)}
+                          onClick={() => decrementItemQuantity(item.name)}
                           className="ml-2 hover:text-green-900 dark:hover:text-green-100"
+                          aria-label={`Decrease ${item.name} quantity`}
+                        >
+                          <Minus className="size-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => incrementItemQuantity(item.name)}
+                          className="ml-1 hover:text-green-900 dark:hover:text-green-100"
+                          aria-label={`Increase ${item.name} quantity`}
+                        >
+                          <Plus className="size-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeItem(item.name)}
+                          className="ml-2 hover:text-green-900 dark:hover:text-green-100"
+                          aria-label={`Remove ${item.name} from your list`}
                         >
                           <X className="size-3" />
                         </button>
@@ -220,9 +237,9 @@ export function HomePage() {
               <Button
                 type="submit"
                 className="w-full bg-green-600 hover:bg-green-700 text-white"
-                disabled={!budget || !postalCode || currentList.length === 0}
+                disabled={!budget || !locationInput || currentList.length === 0 || isResolvingLocation}
               >
-                Find Deals →
+                {isResolvingLocation ? 'Resolving location...' : 'Find Deals →'}
               </Button>
             </form>
           </div>
@@ -251,7 +268,7 @@ export function HomePage() {
               </div>
               <h3 className="mb-2 dark:text-white">Set Your Budget</h3>
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                Enter your budget and postal code to find stores near you.
+                Enter your budget and address or postal code to find stores near you.
               </p>
             </div>
 
@@ -268,7 +285,7 @@ export function HomePage() {
               </div>
               <h3 className="mb-2 dark:text-white">Build Your List</h3>
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                Add grocery items you need — type or pick from suggestions.
+                Paste or type multiple items at once, then fine-tune quantities before you compare.
               </p>
             </div>
 
@@ -399,4 +416,11 @@ export function HomePage() {
       </footer>
     </div>
   );
+}
+
+function parseMultiItemInput(value: string): string[] {
+  return value
+    .split(/[\n,;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }

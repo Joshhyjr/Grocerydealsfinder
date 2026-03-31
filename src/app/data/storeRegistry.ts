@@ -50,13 +50,22 @@ export const regions: RegionConfig[] = [
 
 export const storeRegistry: StoreRegistryEntry[] = [
   {
-    id: 'loblaws-hfx',
-    displayName: 'Loblaws',
+    id: 'atlantic-superstore-almon',
+    displayName: 'Atlantic Superstore',
     aliases: ['Loblaws', 'Atlantic Superstore'],
     source: 'pcx',
     address: '5840 Almon St, Halifax, NS',
     regionKeys: ['halifax-metro'],
     coordinates: { lat: 44.6604, lng: -63.6115 },
+  },
+  {
+    id: 'atlantic-superstore-young',
+    displayName: 'Atlantic Superstore',
+    aliases: ['Loblaws', 'Atlantic Superstore'],
+    source: 'pcx',
+    address: '6141 Young St, Halifax, NS',
+    regionKeys: ['halifax-metro'],
+    coordinates: { lat: 44.6577, lng: -63.6103 },
   },
   {
     id: 'nofrills-hfx',
@@ -72,9 +81,9 @@ export const storeRegistry: StoreRegistryEntry[] = [
     displayName: 'Real Canadian Superstore',
     aliases: ['Real Canadian Superstore', 'RCSS'],
     source: 'pcx',
-    address: '6141 Young St, Halifax, NS',
+    address: '660 Portland St, Dartmouth, NS',
     regionKeys: ['halifax-metro'],
-    coordinates: { lat: 44.6577, lng: -63.6103 },
+    coordinates: { lat: 44.6717, lng: -63.5348 },
   },
   {
     id: 'walmart-hfx',
@@ -108,18 +117,51 @@ export function getRegionForPostalCode(postalCode: string): RegionConfig | null 
 }
 
 export function getStoreRegistryEntry(storeName: string, regionKey?: string | null): StoreRegistryEntry | null {
+  return getStoreRegistryCandidates(storeName, regionKey)[0] ?? null;
+}
+
+export function getStoreRegistryCandidates(storeName: string, regionKey?: string | null): StoreRegistryEntry[] {
   const normalizedStoreName = storeName.trim().toLowerCase();
 
-  return (
-    storeRegistry.find((entry) => {
+  return storeRegistry.filter((entry) => {
       const matchesAlias = entry.aliases.some((alias) => alias.toLowerCase() === normalizedStoreName);
       if (!matchesAlias) {
         return false;
       }
 
       return regionKey ? entry.regionKeys.includes(regionKey) : true;
-    }) ?? null
-  );
+    });
+}
+
+export function chooseBestStoreRegistryEntry(
+  storeName: string,
+  regionKey?: string | null,
+  userCoordinates?: StoreCoordinates | null,
+): StoreRegistryEntry | null {
+  const candidates = getStoreRegistryCandidates(storeName, regionKey);
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  if (!userCoordinates) {
+    return candidates[0];
+  }
+
+  // When multiple branches share the same brand label, choose the branch that
+  // is physically closest to the user's resolved location.
+  return candidates.reduce<StoreRegistryEntry>((bestEntry, nextEntry) => {
+    if (!bestEntry.coordinates) {
+      return nextEntry;
+    }
+
+    if (!nextEntry.coordinates) {
+      return bestEntry;
+    }
+
+    const bestDistance = calculateDistanceKm(userCoordinates, bestEntry.coordinates);
+    const nextDistance = calculateDistanceKm(userCoordinates, nextEntry.coordinates);
+    return nextDistance < bestDistance ? nextEntry : bestEntry;
+  }, candidates[0]);
 }
 
 export function getRegionStores(regionKey: string): StoreRegistryEntry[] {

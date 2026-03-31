@@ -1,9 +1,12 @@
 import {
   calculateDistanceKm,
+  chooseBestStoreRegistryEntry,
   getRegionForPostalCode,
-  getStoreRegistryEntry,
   StoreCoordinates,
 } from './storeRegistry';
+import { GroceryListItem } from './groceryData';
+import { ActiveLocation } from './location';
+import { buildSearchExpansionPlan, SearchExpansionPlan, expandSearchQuery } from './searchIntelligence';
 
 // ──────────────────────────────────────────────
 // API CONFIG
@@ -13,6 +16,9 @@ import {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000';
 const APPROX_CITY_DRIVE_KMH = 40;
 const MAX_STORE_DRIVE_MINUTES = 20;
+const CANADIAN_POSTAL_CODE_PATTERN = /^[A-Z]\d[A-Z]\d[A-Z]\d$/;
+const US_ZIP_CODE_PATTERN = /^\d{5}(?:-\d{4})?$/;
+const NOMINATIM_BASE_URL = 'https://nominatim.openstreetmap.org';
 
 // ──────────────────────────────────────────────
 // SHARED TYPES
@@ -46,6 +52,9 @@ export interface ProductResult {
 export interface SearchResponseData {
   query: string;
   postal_code: string;
+  location_label?: string | null;
+  location_source?: string | null;
+  user_coordinates?: StoreCoordinates | null;
   total: number;
   sources: string[];
   failed: Array<{ store: string; error: string }>;
@@ -67,6 +76,7 @@ export interface BasketBreakdownItem {
 export interface BasketStoreResult {
   store_id?: string | null;
   store: string;
+  source?: string | null;
   address?: string | null;
   region?: string | null;
   distance_km?: number | null;
@@ -87,6 +97,8 @@ export interface BasketStoreResult {
 export interface BasketResponseData {
   items: string[];
   postal_code: string;
+  location_label?: string | null;
+  location_source?: string | null;
   region?: string | null;
   user_coordinates?: StoreCoordinates | null;
   total_stores: number;
@@ -138,6 +150,92 @@ export function normalizePostalCode(postalCode: string): string {
   return postalCode.trim().toUpperCase().replace(/\s+/g, '');
 }
 
+export function isPostalCodeInput(value: string): boolean {
+  const normalized = normalizePostalCode(value);
+  return CANADIAN_POSTAL_CODE_PATTERN.test(normalized) || US_ZIP_CODE_PATTERN.test(normalized);
+}
+
+// Freeform location input keeps the UI flexible while the backend continues to
+// receive the postal code field it already understands.
+export async function resolveLocationInput(locationInput: string): Promise<ActiveLocation> {
+  const trimmedLocation = locationInput.trim();
+  if (!trimmedLocation) {
+    throw new Error('Enter an address or postal code to continue.');
+  }
+
+  const inputLooksLikePostalCode = isPostalCodeInput(trimmedLocation);
+
+  const params = new URLSearchParams({
+    q: trimmedLocation,
+    format: 'jsonv2',
+    addressdetails: '1',
+    limit: '1',
+    countrycodes: 'ca',
+  });
+
+  const results = await fetchLocationLookup<Array<NominatimLookupResult>>(
+    `${NOMINATIM_BASE_URL}/search?${params.toString()}`,
+  );
+  const firstResult = results[0];
+  const postalCode = extractPostalCode(firstResult?.address?.postcode);
+
+  if (!postalCode && inputLooksLikePostalCode) {
+    return {
+      input: trimmedLocation,
+      label: normalizePostalCode(trimmedLocation),
+      postalCode: normalizePostalCode(trimmedLocation),
+      coordinates: null,
+      source: 'postal_code',
+    };
+  }
+
+  if (!postalCode) {
+    throw new Error('We could not match that address to a postal code.');
+  }
+
+  const shortAddress = firstResult ? formatStreetAddress(firstResult) : null;
+
+  return {
+    input: trimmedLocation,
+    // Forward geocoding stores the shorter street-level label so the UI can
+    // say "comparing to X street" instead of repeating the full address blob.
+    label: shortAddress || firstResult?.display_name || trimmedLocation,
+    postalCode,
+    coordinates: firstResult ? { lat: Number(firstResult.lat), lng: Number(firstResult.lon) } : null,
+    source: inputLooksLikePostalCode ? 'postal_code' : 'address',
+  };
+}
+
+export async function reverseGeocodeLocation(latitude: number, longitude: number): Promise<ActiveLocation> {
+  const params = new URLSearchParams({
+    format: 'jsonv2',
+    addressdetails: '1',
+    lat: latitude.toString(),
+    lon: longitude.toString(),
+  });
+
+  const result = await fetchLocationLookup<NominatimLookupResult>(
+    `${NOMINATIM_BASE_URL}/reverse?${params.toString()}`,
+  );
+  const postalCode = extractPostalCode(result.address?.postcode);
+
+  if (!postalCode) {
+    throw new Error('We found your location, but not a postal code for it yet.');
+  }
+
+  // Geolocation labels stay intentionally short so the UI shows only the
+  // street-level address instead of the full reverse-geocoded identity string.
+  const shortAddress = formatStreetAddress(result) || result.display_name || 'Current location';
+
+  return {
+    input: shortAddress,
+    label: shortAddress,
+    postalCode,
+    coordinates: { lat: latitude, lng: longitude },
+    source: 'geolocation',
+  };
+}
+
 export async function fetchSearchResults(
   query: string,
   postalCode: string,
@@ -152,15 +250,27 @@ export async function fetchSearchResults(
 
 export async function fetchBasketResults(
   items: string[],
-  postalCode: string,
+  location: ActiveLocation,
   signal?: AbortSignal,
 ): Promise<BasketResponseData> {
+  // Broad terms are expanded before the backend search so generic requests like
+  // "chicken" can still surface common cuts without changing the shopper's list label.
+  const searchPlan = buildSearchExpansionPlan(items);
+  const expandedItems = Array.from(new Set(searchPlan.flatMap((plan) => plan.queries)));
   const params = new URLSearchParams({
-    items: items.join(','),
-    postal_code: normalizePostalCode(postalCode),
+    items: expandedItems.join(','),
+    postal_code: normalizePostalCode(location.postalCode),
+    location_label: location.label,
+    location_source: location.source,
   });
+
+  if (location.coordinates) {
+    params.set('lat', location.coordinates.lat.toString());
+    params.set('lng', location.coordinates.lng.toString());
+  }
+
   const basketData = await fetchApi<BasketResponseData>(`/basket?${params.toString()}`, signal);
-  return enrichBasketResponse(basketData, postalCode);
+  return enrichBasketResponse(basketData, location, searchPlan);
 }
 
 export async function fetchSuggestions(
@@ -172,13 +282,25 @@ export async function fetchSuggestions(
     return [];
   }
 
-  const searchData = await fetchSearchResults(query, postalCode || 'B3K9Z0', signal);
   const uniqueNames = new Set<string>();
+  const expandedQueries = expandSearchQuery(query);
 
-  for (const result of searchData.results) {
-    if (result.name) {
-      uniqueNames.add(result.name);
+  // Generic words should fan out to likely variants so the suggestion list
+  // reflects real products the shopper can add immediately.
+  const searchResponses = await Promise.all(
+    expandedQueries.map((expandedQuery) => fetchSearchResults(expandedQuery, postalCode || 'B3K9Z0', signal)),
+  );
+
+  for (const searchData of searchResponses) {
+    for (const result of searchData.results) {
+      if (result.name) {
+        uniqueNames.add(result.name);
+      }
+      if (uniqueNames.size >= 5) {
+        break;
+      }
     }
+
     if (uniqueNames.size >= 5) {
       break;
     }
@@ -187,15 +309,89 @@ export async function fetchSuggestions(
   return Array.from(uniqueNames);
 }
 
-function enrichBasketResponse(basketData: BasketResponseData, postalCode: string): BasketResponseData {
-  const region = getRegionForPostalCode(postalCode);
-  const userCoordinates = basketData.user_coordinates ?? region?.center ?? null;
+export function applyListQuantitiesToBasketData(
+  basketData: BasketResponseData,
+  listItems: GroceryListItem[],
+): BasketResponseData {
+  const stores = basketData.stores
+    .map((storeResult) => {
+      let totalCost = 0;
+      let availableCount = 0;
+      let missingCount = 0;
+      const availableItems: string[] = [];
+      const missingItems: string[] = [];
+
+      listItems.forEach((listItem) => {
+        const matchedItem = storeResult.breakdown.find((entry) => entry.item.toLowerCase() === listItem.name.toLowerCase());
+
+        if (matchedItem?.price != null) {
+          totalCost += matchedItem.price * listItem.quantity;
+          availableCount += 1;
+          availableItems.push(listItem.name);
+          return;
+        }
+
+        missingCount += 1;
+        missingItems.push(listItem.name);
+      });
+
+      return {
+        ...storeResult,
+        total_cost: roundToCurrency(totalCost),
+        total_cost_str: formatCurrency(totalCost),
+        available_count: availableCount,
+        missing_count: missingCount,
+        available_items: availableItems,
+        missing_items: missingItems,
+      };
+    })
+    // Search results now lead with the stores that can fulfill more of the
+    // list, then break ties on actual basket price and finally distance.
+    .sort((left, right) => {
+      if (right.available_count !== left.available_count) {
+        return right.available_count - left.available_count;
+      }
+
+      if (left.total_cost !== right.total_cost) {
+        return left.total_cost - right.total_cost;
+      }
+
+      return compareDistance(left.distance_km, right.distance_km);
+    });
+
+  const cheapestStore = stores.reduce<typeof stores[number] | null>((bestStore, storeResult) => {
+    if (!bestStore || storeResult.total_cost < bestStore.total_cost) {
+      return storeResult;
+    }
+    return bestStore;
+  }, null);
+
+  return {
+    ...basketData,
+    stores: stores.map((storeResult) => ({
+      ...storeResult,
+      is_best_price: cheapestStore ? (storeResult.store_id ?? storeResult.store) === (cheapestStore.store_id ?? cheapestStore.store) : false,
+    })),
+  };
+}
+
+function enrichBasketResponse(
+  basketData: BasketResponseData,
+  location: ActiveLocation,
+  searchPlan: SearchExpansionPlan[],
+): BasketResponseData {
+  const region = getRegionForPostalCode(location.postalCode);
+  const userCoordinates = basketData.user_coordinates ?? location.coordinates ?? region?.center ?? null;
 
   // This compatibility layer lets the frontend ship nearest-store UX now while
   // still accepting the richer metadata directly from the backend later.
   const stores = basketData.stores
     .map((storeResult) => {
-      const registryEntry = getStoreRegistryEntry(storeResult.store, basketData.region ?? region?.key ?? null);
+      const registryEntry = chooseBestStoreRegistryEntry(
+        storeResult.store,
+        basketData.region ?? region?.key ?? null,
+        userCoordinates,
+      );
       const coordinates = storeResult.coordinates ?? registryEntry?.coordinates ?? null;
       const distanceKm =
         storeResult.distance_km ??
@@ -205,6 +401,8 @@ function enrichBasketResponse(basketData: BasketResponseData, postalCode: string
       return {
         ...storeResult,
         store_id: storeResult.store_id ?? registryEntry?.id ?? null,
+        store: registryEntry?.displayName ?? storeResult.store,
+        source: storeResult.source ?? storeResult.breakdown[0]?.source ?? null,
         address: storeResult.address ?? registryEntry?.address ?? null,
         region: storeResult.region ?? basketData.region ?? region?.key ?? null,
         coordinates,
@@ -212,6 +410,7 @@ function enrichBasketResponse(basketData: BasketResponseData, postalCode: string
         drive_minutes: driveMinutes,
       };
     })
+    .map((storeResult) => collapseExpandedStoreResults(storeResult, searchPlan))
     .sort((left, right) => compareDistance(left.distance_km, right.distance_km) || left.total_cost - right.total_cost);
 
   const cheapestStore = stores.reduce<typeof stores[number] | null>((bestStore, storeResult) => {
@@ -235,16 +434,165 @@ function enrichBasketResponse(basketData: BasketResponseData, postalCode: string
 
   return {
     ...basketData,
-    postal_code: normalizePostalCode(postalCode),
+    items: searchPlan.map((plan) => plan.originalItem),
+    postal_code: normalizePostalCode(location.postalCode),
+    location_label: basketData.location_label ?? location.label,
+    location_source: basketData.location_source ?? location.source,
     region: basketData.region ?? region?.key ?? null,
     user_coordinates: userCoordinates,
+    searches: collapseExpandedSearches(basketData.searches, searchPlan),
     total_stores: storesWithFlags.length,
     stores: storesWithFlags,
   };
+}
+
+function collapseExpandedStoreResults(storeResult: BasketStoreResult, searchPlan: SearchExpansionPlan[]): BasketStoreResult {
+  const breakdown = searchPlan.flatMap((plan) => {
+    const bestMatch = pickBestBreakdownEntry(storeResult.breakdown, plan);
+
+    if (!bestMatch) {
+      return [];
+    }
+
+    return [
+      {
+        ...bestMatch,
+        item: plan.originalItem,
+      },
+    ];
+  });
+  const availableItems = breakdown.map((entry) => entry.item);
+  const missingItems = searchPlan
+    .map((plan) => plan.originalItem)
+    .filter((originalItem) => !availableItems.some((item) => item.toLowerCase() === originalItem.toLowerCase()));
+  const totalCost = roundToCurrency(breakdown.reduce((sum, entry) => sum + (entry.price ?? 0), 0));
+
+  return {
+    ...storeResult,
+    available_items: availableItems,
+    missing_items: missingItems,
+    breakdown,
+    available_count: availableItems.length,
+    missing_count: missingItems.length,
+    total_cost: totalCost,
+    total_cost_str: formatCurrency(totalCost),
+  };
+}
+
+function pickBestBreakdownEntry(
+  breakdown: BasketBreakdownItem[],
+  searchPlan: SearchExpansionPlan,
+): BasketBreakdownItem | null {
+  const matches = breakdown.filter((entry) =>
+    searchPlan.queries.some((query) => normalizeSearchTerm(query) === normalizeSearchTerm(entry.item)),
+  );
+
+  if (matches.length === 0) {
+    return null;
+  }
+
+  // Prefer exact shopper wording when it already matches, otherwise choose the
+  // lowest-priced fallback variant for that broader grocery term.
+  return [...matches].sort((left, right) => {
+    const leftExact = normalizeSearchTerm(left.item) === normalizeSearchTerm(searchPlan.originalItem);
+    const rightExact = normalizeSearchTerm(right.item) === normalizeSearchTerm(searchPlan.originalItem);
+
+    if (leftExact !== rightExact) {
+      return leftExact ? -1 : 1;
+    }
+
+    return (left.price ?? Number.POSITIVE_INFINITY) - (right.price ?? Number.POSITIVE_INFINITY);
+  })[0];
+}
+
+function collapseExpandedSearches(
+  searches: BasketResponseData['searches'],
+  searchPlan: SearchExpansionPlan[],
+): BasketResponseData['searches'] {
+  return Object.fromEntries(
+    searchPlan.map((plan) => {
+      const matchingSearches = plan.queries
+        .map((query) => searches[query])
+        .filter((search): search is NonNullable<typeof search> => Boolean(search));
+
+      return [
+        plan.originalItem,
+        {
+          total: matchingSearches.reduce((sum, search) => sum + search.total, 0),
+          sources: Array.from(new Set(matchingSearches.flatMap((search) => search.sources))),
+          failed: matchingSearches.flatMap((search) => search.failed),
+          cached: matchingSearches.length > 0 && matchingSearches.every((search) => search.cached),
+        },
+      ];
+    }),
+  );
 }
 
 function compareDistance(left: number | null | undefined, right: number | null | undefined): number {
   const normalizedLeft = Number.isFinite(left ?? NaN) ? left ?? 0 : Number.POSITIVE_INFINITY;
   const normalizedRight = Number.isFinite(right ?? NaN) ? right ?? 0 : Number.POSITIVE_INFINITY;
   return normalizedLeft - normalizedRight;
+}
+
+function normalizeSearchTerm(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function formatCurrency(amount: number): string {
+  return `$${roundToCurrency(amount).toFixed(2)}`;
+}
+
+function roundToCurrency(amount: number): number {
+  return Math.round(amount * 100) / 100;
+}
+
+async function fetchLocationLookup<T>(url: string): Promise<T> {
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Location lookup failed with status ${response.status}`);
+  }
+
+  return (await response.json()) as T;
+}
+
+function extractPostalCode(postalCode: string | undefined): string | null {
+  if (!postalCode) {
+    return null;
+  }
+
+  const normalized = normalizePostalCode(postalCode);
+  return isPostalCodeInput(normalized) ? normalized : null;
+}
+
+interface NominatimLookupResult {
+  lat: string;
+  lon: string;
+  display_name?: string;
+  address?: {
+    house_number?: string;
+    road?: string;
+    pedestrian?: string;
+    footway?: string;
+    neighbourhood?: string;
+    postcode?: string;
+  };
+}
+
+function formatStreetAddress(result: NominatimLookupResult): string | null {
+  const address = result.address;
+  if (!address) {
+    return null;
+  }
+
+  const streetName = address.road || address.pedestrian || address.footway;
+  if (!streetName) {
+    return null;
+  }
+
+  return [address.house_number, streetName].filter(Boolean).join(' ');
 }

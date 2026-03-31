@@ -1,19 +1,27 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { SavedGroceryList } from '../data/groceryData';
+import { GroceryListItem, normalizeGroceryListItems, SavedGroceryList } from '../data/groceryData';
+import { ActiveLocation } from '../data/location';
 
 interface GroceryContextType {
-  currentList: string[];
+  currentList: GroceryListItem[];
   addItem: (item: string) => void;
   removeItem: (item: string) => void;
   clearList: () => void;
-  setCurrentList: (items: string[]) => void;
+  setCurrentList: (items: GroceryListItem[]) => void;
+  incrementItemQuantity: (item: string) => void;
+  decrementItemQuantity: (item: string) => void;
 
   savedLists: SavedGroceryList[];
-  saveList: (name: string, items: string[]) => void;
+  saveList: (name: string, items: GroceryListItem[]) => void;
   deleteList: (id: string) => void;
   loadList: (list: SavedGroceryList) => void;
   addItemToSavedList: (listId: string, item: string) => boolean;
   removeItemFromSavedList: (listId: string, item: string) => void;
+
+  activeLocation: ActiveLocation | null;
+  setActiveLocation: (location: ActiveLocation | null) => void;
+  preferredStoreId: string | null;
+  setPreferredStoreId: (storeId: string | null) => void;
 
   isDarkMode: boolean;
   toggleDarkMode: () => void;
@@ -22,19 +30,35 @@ interface GroceryContextType {
 const GroceryContext = createContext<GroceryContextType | undefined>(undefined);
 
 export function GroceryProvider({ children }: { children: ReactNode }) {
-  const [currentList, setCurrentList] = useState<string[]>(() => {
+  const [currentList, setCurrentList] = useState<GroceryListItem[]>(() => {
     const stored = localStorage.getItem('currentGroceryList');
     if (!stored) {
       return [];
     }
 
     try {
-      return JSON.parse(stored);
+      return normalizeGroceryListItems(JSON.parse(stored) as Array<GroceryListItem | string>);
     } catch {
       return [];
     }
   });
   const [savedLists, setSavedLists] = useState<SavedGroceryList[]>([]);
+  const [activeLocation, setActiveLocation] = useState<ActiveLocation | null>(() => {
+    const stored = localStorage.getItem('activeLocation');
+    if (!stored) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(stored) as ActiveLocation;
+    } catch {
+      return null;
+    }
+  });
+  const [preferredStoreId, setPreferredStoreId] = useState<string | null>(() => {
+    const stored = localStorage.getItem('preferredStoreId');
+    return stored || null;
+  });
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     const stored = localStorage.getItem('darkMode');
     // New visitors should land in dark mode, but an explicit stored choice
@@ -55,7 +79,8 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
     const stored = localStorage.getItem('savedGroceryLists');
     if (stored) {
       try {
-        setSavedLists(JSON.parse(stored));
+        const parsedLists = JSON.parse(stored) as Array<Omit<SavedGroceryList, 'items'> & { items: Array<GroceryListItem | string> }>;
+        setSavedLists(parsedLists.map((list) => ({ ...list, items: normalizeGroceryListItems(list.items) })));
       } catch (e) {
         console.error('Failed to load saved lists', e);
       }
@@ -73,6 +98,28 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('currentGroceryList', JSON.stringify(currentList));
   }, [currentList]);
 
+  // The resolved search location is persisted so refreshes and cross-page
+  // navigation keep the same place context without forcing a new geocode lookup.
+  useEffect(() => {
+    if (!activeLocation) {
+      localStorage.removeItem('activeLocation');
+      return;
+    }
+
+    localStorage.setItem('activeLocation', JSON.stringify(activeLocation));
+  }, [activeLocation]);
+
+  // The user's chosen comparison store should survive page changes so the
+  // basket summary and map can stay anchored to the same place.
+  useEffect(() => {
+    if (!preferredStoreId) {
+      localStorage.removeItem('preferredStoreId');
+      return;
+    }
+
+    localStorage.setItem('preferredStoreId', preferredStoreId);
+  }, [preferredStoreId]);
+
   // Apply dark mode class to document and save to localStorage
   useEffect(() => {
     if (isDarkMode) {
@@ -89,24 +136,59 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
 
   const addItem = (item: string) => {
     const trimmed = item.trim();
-    if (trimmed && !currentList.includes(trimmed)) {
-      setCurrentList(prev => [...prev, trimmed]);
+    if (trimmed) {
+      // Multi-add flows should increment quantity for repeats instead of
+      // sprinkling duplicate rows through the active working list.
+      setCurrentList((prev) => {
+        const existingItem = prev.find((entry) => entry.name.toLowerCase() === trimmed.toLowerCase());
+        if (!existingItem) {
+          return [...prev, { name: trimmed, quantity: 1 }];
+        }
+
+        return prev.map((entry) =>
+          entry.name.toLowerCase() === trimmed.toLowerCase()
+            ? { ...entry, quantity: entry.quantity + 1 }
+            : entry,
+        );
+      });
     }
   };
 
   const removeItem = (item: string) => {
-    setCurrentList(prev => prev.filter(i => i !== item));
+    setCurrentList(prev => prev.filter((entry) => entry.name !== item));
   };
 
   const clearList = () => {
     setCurrentList([]);
   };
 
-  const saveList = (name: string, items: string[]) => {
+  const incrementItemQuantity = (item: string) => {
+    setCurrentList((prev) =>
+      prev.map((entry) => (entry.name === item ? { ...entry, quantity: entry.quantity + 1 } : entry)),
+    );
+  };
+
+  const decrementItemQuantity = (item: string) => {
+    setCurrentList((prev) =>
+      prev.flatMap((entry) => {
+        if (entry.name !== item) {
+          return [entry];
+        }
+
+        if (entry.quantity <= 1) {
+          return [];
+        }
+
+        return [{ ...entry, quantity: entry.quantity - 1 }];
+      }),
+    );
+  };
+
+  const saveList = (name: string, items: GroceryListItem[]) => {
     const newList: SavedGroceryList = {
       id: Date.now().toString(),
       name,
-      items,
+      items: normalizeGroceryListItems(items),
       createdAt: new Date().toISOString(),
     };
     setSavedLists(prev => [newList, ...prev]);
@@ -117,7 +199,7 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
   };
 
   const loadList = (list: SavedGroceryList) => {
-    setCurrentList([...list.items]);
+    setCurrentList(normalizeGroceryListItems(list.items));
     // Update lastUsed
     setSavedLists(prev =>
       prev.map(l =>
@@ -139,7 +221,7 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
           return list;
         }
 
-        const alreadyExists = list.items.some((savedItem) => savedItem.toLowerCase() === trimmed.toLowerCase());
+        const alreadyExists = list.items.some((savedItem) => savedItem.name.toLowerCase() === trimmed.toLowerCase());
         if (alreadyExists) {
           return list;
         }
@@ -147,7 +229,7 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
         didAdd = true;
         // Saved list edits are intentionally isolated from the active working
         // list so results-page changes never overwrite a saved template silently.
-        return { ...list, items: [...list.items, trimmed] };
+        return { ...list, items: [...list.items, { name: trimmed, quantity: 1 }] };
       }),
     );
 
@@ -163,7 +245,7 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
 
         return {
           ...list,
-          items: list.items.filter((savedItem) => savedItem !== item),
+          items: list.items.filter((savedItem) => savedItem.name !== item),
         };
       }),
     );
@@ -177,12 +259,18 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
         removeItem,
         clearList,
         setCurrentList,
+        incrementItemQuantity,
+        decrementItemQuantity,
         savedLists,
         saveList,
         deleteList,
         loadList,
         addItemToSavedList,
         removeItemFromSavedList,
+        activeLocation,
+        setActiveLocation,
+        preferredStoreId,
+        setPreferredStoreId,
         isDarkMode,
         toggleDarkMode,
       }}

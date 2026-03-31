@@ -23,10 +23,11 @@ import {
   DialogTitle,
   DialogFooter,
 } from '../components/ui/dialog';
-import { ArrowLeft, Trash2, ShoppingCart, Calendar, Clock, Play, Moon, Sun, Plus, X } from 'lucide-react';
+import { ArrowLeft, Trash2, ShoppingCart, Calendar, Clock, Play, Moon, Sun, Plus, X, MapPin } from 'lucide-react';
 import { useGrocery } from '../context/GroceryContext';
-import { normalizePostalCode } from '../data/api';
 import { toast } from 'sonner';
+import { useLocationInput } from '../hooks/useLocationInput';
+import { buildLocationSearchParams } from '../data/location';
 
 export function SavedListsPage() {
   const navigate = useNavigate();
@@ -36,28 +37,52 @@ export function SavedListsPage() {
     loadList,
     addItemToSavedList,
     removeItemFromSavedList,
+    activeLocation,
+    setActiveLocation,
     isDarkMode,
     toggleDarkMode,
   } = useGrocery();
   const [runDialogOpen, setRunDialogOpen] = useState(false);
   const [selectedList, setSelectedList] = useState<string | null>(null);
   const [budget, setBudget] = useState('');
-  const [postalCode, setPostalCode] = useState('');
   const [listDrafts, setListDrafts] = useState<Record<string, string>>({});
+  const {
+    locationInput,
+    setLocationInput,
+    isResolvingLocation,
+    resolveLocation,
+    useCurrentLocation,
+  } = useLocationInput(activeLocation?.input ?? '');
 
   const handleRunList = (listId: string) => {
     setSelectedList(listId);
     setRunDialogOpen(true);
   };
 
-  const handleProceed = () => {
-    if (selectedList && budget && postalCode) {
+  const handleProceed = async () => {
+    if (selectedList && budget && locationInput) {
       const list = savedLists.find(l => l.id === selectedList);
       if (list) {
-        loadList(list);
-        navigate(`/results?budget=${budget}&postalCode=${normalizePostalCode(postalCode)}`);
-        toast.success(`Running "${list.name}" list`);
+        try {
+          const location = await resolveLocation();
+          setActiveLocation(location);
+          loadList(list);
+          navigate(`/results?${buildLocationSearchParams(budget, location).toString()}`);
+          toast.success(`Running "${list.name}" list`);
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : 'Unable to resolve that location right now.');
+        }
       }
+    }
+  };
+
+  const handleUseCurrentLocation = async () => {
+    try {
+      const location = await useCurrentLocation();
+      setActiveLocation(location);
+      toast.success('Using your current location.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to use your current location right now.');
     }
   };
 
@@ -180,18 +205,19 @@ export function SavedListsPage() {
                   </div>
 
                   <div className="flex flex-wrap gap-2 mb-4 max-h-32 overflow-y-auto">
-                    {list.items.map((item, index) => (
+                    {list.items.map((item) => (
                       <Badge
-                        key={index}
+                        key={item.name}
                         variant="secondary"
                         className="text-xs dark:bg-gray-700 dark:text-gray-300 pr-1"
                       >
-                        {item}
+                        {item.name}
+                        {item.quantity > 1 ? ` x${item.quantity}` : ''}
                         <button
                           type="button"
-                          onClick={() => handleRemoveSavedItem(list.id, item)}
+                          onClick={() => handleRemoveSavedItem(list.id, item.name)}
                           className="ml-2 rounded-full p-0.5 hover:bg-gray-200 dark:hover:bg-gray-600"
-                          aria-label={`Remove ${item} from ${list.name}`}
+                          aria-label={`Remove ${item.name} from ${list.name}`}
                         >
                           <X className="size-3" />
                         </button>
@@ -261,7 +287,7 @@ export function SavedListsPage() {
           <DialogHeader>
             <DialogTitle>Run Shopping List</DialogTitle>
             <DialogDescription>
-              Enter your budget and postal code to find deals for this list
+              Enter your budget and address or postal code to find deals for this list
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
@@ -277,14 +303,23 @@ export function SavedListsPage() {
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm">Postal Code</label>
+              <label className="text-sm">Address or Postal Code</label>
               <Input
                 type="text"
-                placeholder="e.g., B3K 9Z0"
-                value={postalCode}
-                onChange={(e) => setPostalCode(e.target.value)}
-                maxLength={10}
+                placeholder="e.g., 123 Main St Halifax or B3H 2Y7"
+                value={locationInput}
+                onChange={(e) => setLocationInput(e.target.value)}
               />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleUseCurrentLocation}
+                disabled={isResolvingLocation}
+                className="w-full"
+              >
+                <MapPin className="size-4 mr-2" />
+                {isResolvingLocation ? 'Finding your location...' : 'Use My Location'}
+              </Button>
             </div>
           </div>
           <DialogFooter>
@@ -293,10 +328,10 @@ export function SavedListsPage() {
             </Button>
             <Button 
               onClick={handleProceed} 
-              disabled={!budget || !postalCode}
+              disabled={!budget || !locationInput || isResolvingLocation}
               className="bg-green-600 hover:bg-green-700"
             >
-              Find Deals
+              {isResolvingLocation ? 'Resolving location...' : 'Find Deals'}
             </Button>
           </DialogFooter>
         </DialogContent>
