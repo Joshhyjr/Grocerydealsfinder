@@ -1,3 +1,8 @@
+export interface GroceryListItem {
+  name: string;
+  quantity: number;
+}
+
 export interface GroceryItem {
   id: string;
   name: string;
@@ -26,9 +31,35 @@ export interface Store {
 export interface SavedGroceryList {
   id: string;
   name: string;
-  items: string[]; // item names
+  items: GroceryListItem[];
   createdAt: string;
   lastUsed?: string;
+}
+
+export function normalizeGroceryListItems(items: Array<GroceryListItem | string>): GroceryListItem[] {
+  const mergedItems = new Map<string, GroceryListItem>();
+
+  items.forEach((item) => {
+    const normalizedItem = typeof item === 'string'
+      ? { name: item.trim(), quantity: 1 }
+      : { name: item.name.trim(), quantity: Math.max(1, Math.floor(item.quantity || 1)) };
+
+    if (!normalizedItem.name) {
+      return;
+    }
+
+    const itemKey = normalizedItem.name.toLowerCase();
+    const existingItem = mergedItems.get(itemKey);
+
+    if (existingItem) {
+      existingItem.quantity += normalizedItem.quantity;
+      return;
+    }
+
+    mergedItems.set(itemKey, { ...normalizedItem });
+  });
+
+  return Array.from(mergedItems.values());
 }
 
 // All available grocery items
