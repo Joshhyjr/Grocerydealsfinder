@@ -1,0 +1,36 @@
+name: Deploy Grocery API
+
+on:
+  # Keep API deployment explicit until Cloudflare credentials are configured.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        # Match the dependency mode used by the frontend workflow.
+        run: npm ci --legacy-peer-deps
+
+      - name: Verify Worker
+        # Stop malformed snapshots or API regressions before deployment.
+        run: npm run api:check && npm run api:test && npm run api:deploy:dry
+
+      - name: Deploy Worker
+        # CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID belong in GitHub Actions secrets.
+        run: npm run api:deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

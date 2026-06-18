@@ -41,6 +41,9 @@ jobs:
         env:
           # Match Vite's production base path to this repository's GitHub Pages URL.
           GITHUB_PAGES: 'true'
+          # Point the static frontend at the separately deployed Worker when the
+          # repository variable is configured; otherwise estimate mode remains available.
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
