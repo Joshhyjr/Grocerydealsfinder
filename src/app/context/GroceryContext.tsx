@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { SavedGroceryList } from '../data/groceryData';
+import { readStoredItems, readStoredSavedLists } from '../data/persistence';
 
 interface GroceryContextType {
   currentList: string[];
@@ -22,19 +23,14 @@ interface GroceryContextType {
 const GroceryContext = createContext<GroceryContextType | undefined>(undefined);
 
 export function GroceryProvider({ children }: { children: ReactNode }) {
-  const [currentList, setCurrentList] = useState<string[]>(() => {
-    const stored = localStorage.getItem('currentGroceryList');
-    if (!stored) {
-      return [];
-    }
-
-    try {
-      return JSON.parse(stored);
-    } catch {
-      return [];
-    }
-  });
-  const [savedLists, setSavedLists] = useState<SavedGroceryList[]>([]);
+  // Migrate browser data before the first render so React never receives legacy
+  // item objects as children.
+  const [currentList, setCurrentList] = useState<string[]>(() =>
+    readStoredItems('currentGroceryList')
+  );
+  const [savedLists, setSavedLists] = useState<SavedGroceryList[]>(() =>
+    readStoredSavedLists('savedGroceryLists')
+  );
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     const stored = localStorage.getItem('darkMode');
     // New visitors should land in dark mode, but an explicit stored choice
@@ -50,19 +46,8 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
     }
   });
 
-  // Load saved lists from localStorage on mount
-  useEffect(() => {
-    const stored = localStorage.getItem('savedGroceryLists');
-    if (stored) {
-      try {
-        setSavedLists(JSON.parse(stored));
-      } catch (e) {
-        console.error('Failed to load saved lists', e);
-      }
-    }
-  }, []);
-
-  // Save to localStorage whenever savedLists changes
+  // Persisting immediately also upgrades legacy browser data to the canonical
+  // string-only shape after the first successful render.
   useEffect(() => {
     localStorage.setItem('savedGroceryLists', JSON.stringify(savedLists));
   }, [savedLists]);
