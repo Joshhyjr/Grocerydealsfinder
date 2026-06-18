@@ -1,3 +1,7 @@
 node_modules
 dist
 .DS_Store
+
+# Cloudflare local state and secrets must never be committed.
+.wrangler
+.dev.vars

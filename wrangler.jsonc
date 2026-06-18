@@ -1,0 +1,40 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "grocery-deals-api",
+  "main": "worker/src/index.ts",
+  "compatibility_date": "2026-06-18",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Wrangler automatically provisions this KV namespace on the first deploy.
+  "kv_namespaces": [
+    {
+      "binding": "PRICE_SNAPSHOTS"
+    }
+  ],
+
+  // Public configuration belongs here; tokens are installed with `wrangler secret put`.
+  "vars": {
+    "ALLOWED_ORIGINS": "https://joshhyjr.github.io,http://127.0.0.1:5173,http://localhost:5173",
+    "DEFAULT_REGION": "halifax-metro",
+    "PROVIDER_FEED_URLS": "",
+    "OPEN_PRICES_RADIUS_KM": "30",
+    "SNAPSHOT_MAX_AGE_SECONDS": "21600"
+  },
+
+  // Refresh approved provider feeds every six hours without blocking user requests.
+  "triggers": {
+    "crons": ["17 */6 * * *"]
+  },
+
+  // Structured Worker logs make provider and refresh failures searchable.
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.05
+    }
+  }
+}

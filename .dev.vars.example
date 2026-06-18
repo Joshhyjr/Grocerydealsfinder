@@ -1,0 +1,5 @@
+# Copy this file to .dev.vars for local authenticated ingestion.
+INGEST_TOKEN=replace-with-a-long-random-token
+
+# Optional shared bearer token for approved provider feeds.
+PROVIDER_API_TOKEN=

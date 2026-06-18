@@ -5,7 +5,14 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "dev": "vite"
+    "dev": "vite",
+    "api:dev": "wrangler dev --port 8000",
+    "api:types": "wrangler types worker/env.d.ts",
+    "api:check": "tsc --noEmit -p worker/tsconfig.json",
+    "test": "vitest run",
+    "api:test": "vitest run worker",
+    "api:deploy": "wrangler deploy",
+    "api:deploy:dry": "wrangler deploy --dry-run"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
@@ -50,16 +57,16 @@
     "lucide-react": "0.487.0",
     "motion": "12.23.24",
     "next-themes": "0.4.6",
+    "react": "^19.0.0",
     "react-day-picker": "8.10.1",
     "react-dnd": "16.0.1",
     "react-dnd-html5-backend": "16.0.1",
+    "react-dom": "^19.0.0",
     "react-hook-form": "7.55.0",
     "react-leaflet": "^5.0.0",
     "react-popper": "2.3.0",
     "react-resizable-panels": "2.1.7",
     "react-responsive-masonry": "2.7.1",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
     "react-router": "7.13.0",
     "react-slick": "0.31.0",
     "recharts": "2.15.2",
@@ -69,10 +76,14 @@
     "vaul": "1.1.2"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260617.1",
     "@tailwindcss/vite": "4.1.12",
     "@vitejs/plugin-react": "4.7.0",
     "tailwindcss": "4.1.12",
-    "vite": "6.3.5"
+    "typescript": "^6.0.3",
+    "vite": "6.3.5",
+    "vitest": "^4.1.9",
+    "wrangler": "^4.101.0"
   },
   "pnpm": {
     "overrides": {
