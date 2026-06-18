@@ -1,263 +1,182 @@
 # Grocery Deals Finder
 
-Grocery Deals Finder is a two-part project:
+Grocery Deals Finder compares a grocery basket across Halifax-area stores. It consists of:
 
-- a React/Vite frontend in this repo under `src/app`
-- a FastAPI + Python scraping backend that lives alongside the project files
+- a React/Vite frontend deployed to GitHub Pages
+- a Cloudflare Worker API with KV-backed price snapshots
+- a bundled estimate catalogue used when no approved live snapshot exists
+- attributed Open Prices records when recent Halifax data exists
+- anonymous community price reports that expire after 14 days
 
-The frontend is now connected to the backend for live grocery suggestions, basket comparison, saved-list reruns, and a postal-code-aware store locator experience.
+## Why cached snapshots
 
-## What Is Implemented
+The website never scrapes a retailer while a shopper waits. Approved retailer APIs, licensed data providers, or a separate collection job publish normalized snapshots to the Worker. The Worker then:
 
-### Frontend
+- stores the latest valid snapshot in Cloudflare KV
+- serves `/search` and `/basket` from cached data
+- keeps serving the last good snapshot if a refresh fails
+- refreshes configured provider feeds every six hours
+- falls back to clearly labelled estimates before the first live snapshot
 
-- Live item suggestions from the backend on the home page
-- Live basket comparison results on the results page
-- Saved shopping lists with local persistence and in-place item editing
-- Active comparison list editing directly from the results page
-- Dark mode enabled by default for new users, with persisted theme preference
-- Store explorer page powered by live backend basket data
-- Registry-backed nearest-store metadata enrichment when the backend does not yet provide full store location details
-- OpenStreetMap store locator centered on the selected or best local store
-- Store visibility filtered to roughly 20 minutes from the entered postal code, while always keeping the best overall deal visible
-- Budget + postal code flow carried from search into results
+This isolates retailer changes from the frontend and prevents one broken provider from taking down results.
 
-### Backend
+## Free and legally cautious data model
 
-- FastAPI API layer with:
-  - `GET /search`
-  - `GET /basket`
-  - `GET /cache/status`
-  - `DELETE /cache/{query}`
-  - `GET /health`
-- SQLite cache with 1-hour TTL (Time to live)
-- Background cache warmer scheduler
-- Unit price normalization to per-100g / per-100ml
-- Basket comparison across stores
-- Request-based scrapers for:
-  - Loblaws
-  - No Frills
-  - Real Canadian Superstore
-  - Flipp
-- Existing Playwright Walmart scraper still included
+The app does not scrape retailer pages. It uses:
 
-## Current Scraper Status
+- **Open Prices** read-only data with visible attribution
+- **Anonymous community reports** containing only product, store, price, package/unit, postal code, and observation date
+- **Estimates** when neither source has recent coverage
 
-- `Loblaws`: working
-- `No Frills`: working
-- `Real Canadian Superstore`: working
-- `Flipp`: working
-- `Walmart`: currently failing because Walmart’s live site search selector has changed
+Community reports are rate-limited, restricted to supported stores, and automatically removed after 14 days. The app does not request names, emails, loyalty details, payment information, or receipt images.
 
-That means live comparison currently works with the four non-Walmart sources.
+## Local development
 
-## Project Structure
-
-### Frontend Repo
-
-- `src/app/pages/HomePage.tsx`
-- `src/app/pages/ResultsPage.tsx`
-- `src/app/pages/MapViewPage.tsx`
-- `src/app/pages/SavedListsPage.tsx`
-- `src/app/context/GroceryContext.tsx`
-- `src/app/data/api.ts`
-- `src/app/routes.tsx`
-
-### Backend Files
-
-- `api.py`
-- `grocery_search.py`
-- `basket.py`
-- `normalize.py`
-- `cache.py`
-- `scheduler.py`
-- `pcx_storefront.py`
-- `walmart_scrapper.py`
-- `loblaws_scrapper.py`
-- `nofrills_scrapper.py`
-- `rcss_scrapper.py`
-- `flipp_scrapper.py`
-
-## Setup
-
-### Frontend
-
-From this repo:
+Install dependencies:
 
 ```bash
-npm install --legacy-peer-deps
+npm ci --legacy-peer-deps
 ```
 
-The `--legacy-peer-deps` flag is currently needed because the repo is on React 19 while some older UI dependencies still declare React 18-era peer ranges.
-
-### Backend
-
-The Python backend uses a local virtual environment. In the current setup it is:
+Run the API:
 
 ```bash
-./grocery-env
+cp .dev.vars.example .dev.vars
+npm run api:dev
 ```
 
-If you need FastAPI or related packages installed:
-
-```bash
-cd /path/to/backend
-source ./grocery-env/bin/activate
-pip install fastapi uvicorn requests playwright
-```
-
-## Running The App
-
-You need two terminals.
-
-### Terminal 1: Run FastAPI Backend
-
-```bash
-cd /path/to/backend
-source ./grocery-env/bin/activate
-uvicorn api:app --app-dir . --host 127.0.0.1 --port 8000 --reload
-```
-
-Backend will be available at:
-
-- [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
-- [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-
-### Terminal 2: Run Frontend
+Run the frontend in another terminal:
 
 ```bash
 npm run dev
 ```
 
-Frontend will usually be available at:
+Development URLs:
 
-- [http://127.0.0.1:5173](http://127.0.0.1:5173)
+- Frontend: [http://127.0.0.1:5173](http://127.0.0.1:5173)
+- API health: [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
 
-## Main User Flow
+## API endpoints
 
-1. Open the frontend
-2. Enter a budget
-3. Enter a postal code
-4. Add grocery items
-5. Click `Find Deals`
-6. Review live basket totals for stores within about 20 minutes of that postal code
-7. Remove items from the active comparison if needed
-8. Open `Store Explorer` to inspect the selected stores on OpenStreetMap
-9. Save the list if needed
-10. Re-run or edit saved lists from the saved-lists page
-
-## API Endpoints
-
-### Search
-
-```text
-GET /search?q=milk&postal_code=B3K9Z0
-```
-
-Returns live combined search results across configured sources.
-
-### Basket
-
-```text
-GET /basket?items=milk,eggs,bread&postal_code=B3K9Z0
-```
-
-Returns ranked basket totals per store using the cheapest available match per item.
-
-Frontend enrichment currently adds:
-
-- region-backed store metadata when needed
-- distance and approximate drive-time estimates
-- best-deal and nearest-store flags
-- 20-minute visibility filtering, except the best overall deal remains visible
-
-### Cache Status
-
-```text
-GET /cache/status
-```
-
-Returns current cache entries.
-
-### Cache Invalidate
-
-```text
-DELETE /cache/{query}?postal_code=B3K9Z0
-```
-
-Invalidates cached results for a query.
-
-### Health
+Public:
 
 ```text
 GET /health
+GET /search?q=milk&postal_code=B3H2Y7
+GET /basket?items=milk,eggs,bread&postal_code=B3H2Y7
+POST /community/prices
 ```
 
-Returns API health plus scraper availability.
+Authenticated administration:
 
-## Cache + Scheduler
+```text
+POST /admin/snapshots
+POST /admin/refresh
+Authorization: Bearer <INGEST_TOKEN>
+```
 
-The backend uses SQLite cache storage in:
+See [worker/PROVIDER_CONTRACT.md](worker/PROVIDER_CONTRACT.md) for the normalized feed and upload schema.
 
-- `grocery_cache.db`
+## Deploy the Cloudflare Worker
 
-Cache behavior:
-
-- TTL: 1 hour
-- scheduler refreshes every 55 minutes
-- postal code is included in cache key behavior
-
-Warm terms:
-
-- beef
-- chicken
-- milk
-- eggs
-- bread
-- pork
-- salmon
-- cheese
-- butter
-- pasta
-
-Run the scheduler with:
+Authenticate once:
 
 ```bash
-cd /path/to/backend
-source ./grocery-env/bin/activate
-python scheduler.py
+npx wrangler login
 ```
 
-## Live Data Notes
+Install the ingestion secret:
 
-- Loblaws-family stores are now request-based, not Playwright-based
-- Flipp returns flyer deals and includes expiry dates
-- Unit prices are normalized in backend search results
-- Sponsored products are filtered out where supported
-- Results are sorted cheapest first, null prices last
-- The frontend can enrich basket results with store registry metadata so postal-code-based distance rules still work before the backend sends full location fields
+```bash
+npx wrangler secret put INGEST_TOKEN
+```
 
-## Known Limitations
+If approved provider feeds share a bearer token:
 
-- Walmart currently needs its selector updated
-- Store distance and drive-time filtering are approximate today and depend on registry/default coordinates when the backend does not provide exact store locations
-- The OpenStreetMap embed is intentionally simple: the selected store is centered, but marker-rich multi-store interaction still depends on backend location quality
-- `src/app/data/groceryData.ts` still exists from the original mock UI scaffold, but live result pages now use the backend instead
+```bash
+npx wrangler secret put PROVIDER_API_TOKEN
+```
 
-## Verification Completed
+Deploy:
 
-Implemented and verified:
+```bash
+npm run api:check
+npm run api:test
+npm run api:deploy
+```
 
-- frontend build passes with `npm run build`
-- frontend pages call the live backend
-- Loblaws, No Frills, RCSS, and Flipp return live results
-- basket comparison works through the UI/backend integration
-- results and map views apply the 20-minute local-store rule while preserving the best overall deal
-- saved lists and active comparison lists support item-level editing
-- OpenStreetMap store locator renders from the current frontend flow
+Wrangler provisions the `PRICE_SNAPSHOTS` KV namespace declared in `wrangler.jsonc`. The deployment output provides a URL such as:
 
-## Extra Documentation
+```text
+https://grocery-deals-api.<account>.workers.dev
+```
 
-For the full architecture, schema, backend flow, and data model, see:
+## Connect GitHub Pages
 
-- `PROJECT_SCHEMA.md`
+In the GitHub repository:
+
+1. Open **Settings → Secrets and variables → Actions → Variables**.
+2. Add `VITE_API_BASE_URL` with the deployed Worker URL.
+3. Re-run the **Deploy to GitHub Pages** workflow.
+
+The Pages workflow injects that variable into the Vite build. If it is absent or the API fails, the frontend still switches to labelled estimate mode.
+
+## Configure approved provider feeds
+
+`PROVIDER_FEED_URLS` in `wrangler.jsonc` accepts a comma-separated list of HTTPS endpoints that return the normalized provider contract.
+
+Example:
+
+```jsonc
+"PROVIDER_FEED_URLS": "https://provider.example/halifax-prices,https://retailer.example/catalogue"
+```
+
+The Worker fetches all configured feeds on its cron schedule, validates and merges successful payloads, and writes the new snapshot only when at least one feed succeeds.
+
+Do not place API tokens in `wrangler.jsonc`. Store them with `wrangler secret put`.
+
+## Open Prices
+
+The scheduled Worker checks for recent CAD prices within the configured Halifax radius:
+
+```jsonc
+"OPEN_PRICES_RADIUS_KM": "30"
+```
+
+Open Prices coverage may be sparse. Empty coverage is expected and leaves estimates and community reports in place. Records are visibly attributed to [Open Prices](https://prices.openfoodfacts.org/) and expire locally after 14 days.
+
+## Manual or pipeline ingestion
+
+A trusted data pipeline can upload a snapshot directly:
+
+```bash
+curl -X POST "https://grocery-deals-api.example.workers.dev/admin/snapshots" \
+  -H "Authorization: Bearer $INGEST_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data-binary @snapshot.json
+```
+
+Uploads are limited to 5 MiB and 20,000 products, schema validated, and rejected if prices or required fields are malformed.
+
+## GitHub deployment
+
+- `.github/workflows/deploy-pages.yml` deploys the frontend.
+- `.github/workflows/deploy-api.yml` manually deploys the Worker after these Actions secrets are configured:
+  - `CLOUDFLARE_API_TOKEN`
+  - `CLOUDFLARE_ACCOUNT_ID`
+
+## Verification commands
+
+```bash
+npm run api:types
+npm run api:check
+npm run api:test
+npm run api:deploy:dry
+npm run build
+```
+
+## Live-data guidance
+
+Retailer-authorized APIs or licensed feeds are preferable. Retailer websites frequently prohibit automated extraction and change without notice. If browser collection is unavoidable, keep it in a separate scheduled job that publishes normalized snapshots to this API; never run browser automation inside a shopper request.
+
+Open Prices reuse must continue to follow its OdBL requirements. This repository provides implementation guidance, not legal advice.
