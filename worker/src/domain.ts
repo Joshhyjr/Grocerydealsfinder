@@ -257,9 +257,11 @@ function cheapestMatch(products: CachedProduct[], query: string): CachedProduct 
   const normalizedQuery = normalizeTerm(query);
   return products
     .filter((product) => productMatches(product, normalizedQuery))
-    .reduce<CachedProduct | null>((best, product) =>
-      !best || product.price < best.price ? product : best
-    , null);
+    .reduce<CachedProduct | null>((best, product) => {
+      // Prefer live/community observations over seed estimates even when the
+      // provider uses a more specific product name such as "2% Milk."
+      return !best || compareSourcePriority(product, best) < 0 ? product : best;
+    }, null);
 }
 
 function selectPreferredProducts(products: CachedProduct[]): CachedProduct[] {

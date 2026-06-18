@@ -152,6 +152,12 @@ export interface BasketResponseData {
   snapshot_stale?: boolean;
 }
 
+// Basket comparisons must favour coverage before price; otherwise a store with
+// one cheap item can incorrectly beat a complete grocery basket.
+export function compareBasketValue(left: BasketStoreResult, right: BasketStoreResult): number {
+  return right.available_count - left.available_count || left.total_cost - right.total_cost;
+}
+
 // ──────────────────────────────────────────────
 // FETCH HELPERS
 // Centralizing request and error handling keeps the pages clean
@@ -326,8 +332,8 @@ function enrichBasketResponse(basketData: BasketResponseData, postalCode: string
     })
     .sort((left, right) => compareDistance(left.distance_km, right.distance_km) || left.total_cost - right.total_cost);
 
-  const cheapestStore = stores.reduce<typeof stores[number] | null>((bestStore, storeResult) => {
-    if (!bestStore || storeResult.total_cost < bestStore.total_cost) {
+  const bestBasketStore = stores.reduce<typeof stores[number] | null>((bestStore, storeResult) => {
+    if (!bestStore || compareBasketValue(storeResult, bestStore) < 0) {
       return storeResult;
     }
     return bestStore;
@@ -341,7 +347,9 @@ function enrichBasketResponse(basketData: BasketResponseData, postalCode: string
       is_within_drive_window:
         storeResult.drive_minutes != null ? storeResult.drive_minutes <= MAX_STORE_DRIVE_MINUTES : false,
       is_nearest: nearestStoreId ? storeIdentifier === (nearestStoreId.store_id ?? nearestStoreId.store) : false,
-      is_best_price: cheapestStore ? storeIdentifier === (cheapestStore.store_id ?? cheapestStore.store) : false,
+      is_best_price: bestBasketStore
+        ? storeIdentifier === (bestBasketStore.store_id ?? bestBasketStore.store)
+        : false,
     };
   });
 
@@ -450,10 +458,7 @@ function buildFallbackBasketResponse(
     } satisfies BasketStoreResult;
   }).filter((store) => store.available_count > 0);
 
-  stores.sort((left, right) => {
-    const availabilityDifference = right.available_count - left.available_count;
-    return availabilityDifference || left.total_cost - right.total_cost;
-  });
+  stores.sort(compareBasketValue);
 
   const bestAvailability = stores[0]?.available_count ?? 0;
   const bestStore = stores

@@ -19,6 +19,7 @@ import {
   BasketBreakdownItem,
   BasketResponseData,
   BasketStoreResult,
+  compareBasketValue,
   fetchBasketResults,
   isCommunityReportingAvailable,
   normalizePostalCode,
@@ -104,9 +105,9 @@ export function ResultsPage() {
     // drive window so the user can still see if a longer trip is worth it.
     return sortedResults.filter((storeResult) => storeResult.is_best_price || storeResult.is_within_drive_window);
   }, [sortedResults]);
-  const cheapestStore = useMemo(() => {
+  const bestBasketStore = useMemo(() => {
     return visibleResults.reduce<BasketStoreResult | null>((bestStore, storeResult) => {
-      if (!bestStore || storeResult.total_cost < bestStore.total_cost) {
+      if (!bestStore || compareBasketValue(storeResult, bestStore) < 0) {
         return storeResult;
       }
       return bestStore;
@@ -269,12 +270,14 @@ export function ResultsPage() {
                   <AlertCircle className="mt-0.5 size-5 shrink-0 text-amber-600" />
                   <div>
                     <p className="font-medium text-amber-900 dark:text-amber-200">
-                      {basketData.snapshot_stale ? 'Showing the last cached prices' : 'Showing catalogue estimates'}
+                      {basketData.data_source === 'estimate'
+                        ? 'Showing catalogue estimates'
+                        : 'Showing the last cached prices'}
                     </p>
                     <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
-                      {basketData.snapshot_stale
-                        ? 'The latest refresh has expired, so these are the last successfully cached prices. Verify prices before shopping.'
-                        : 'Some items use sample estimates because no recent open or community price exists. Check each item’s source before shopping.'}
+                      {basketData.data_source === 'estimate'
+                        ? 'Some items use sample estimates because no recent open or community price exists. Check each item’s source before shopping.'
+                        : 'The latest refresh has expired, so these are the last successfully cached prices. Verify prices before shopping.'}
                     </p>
                   </div>
                 </div>
@@ -292,15 +295,15 @@ export function ResultsPage() {
               </Card>
               <Card className="p-5 dark:bg-gray-800 dark:border-gray-700">
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Best Basket</p>
-                <p className="text-3xl text-green-600">{cheapestStore?.total_cost_str ?? '$0.00'}</p>
+                <p className="text-3xl text-green-600">{bestBasketStore?.total_cost_str ?? 'Unavailable'}</p>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
-                  {cheapestStore?.store ?? 'No stores available'}
+                  {bestBasketStore?.store ?? 'No stores available'}
                 </p>
               </Card>
               <Card className="p-5 dark:bg-gray-800 dark:border-gray-700">
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Budget Status</p>
-                <p className={`text-3xl ${cheapestStore && cheapestStore.total_cost <= budget ? 'text-green-600' : 'text-amber-500'}`}>
-                  {cheapestStore && cheapestStore.total_cost <= budget ? 'Within' : 'Over'}
+                <p className={`text-3xl ${bestBasketStore && bestBasketStore.total_cost <= budget ? 'text-green-600' : 'text-amber-500'}`}>
+                  {bestBasketStore ? (bestBasketStore.total_cost <= budget ? 'Within' : 'Over') : 'Unknown'}
                 </p>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">{visibleResults.length} stores shown</p>
               </Card>
@@ -340,9 +343,25 @@ export function ResultsPage() {
               </div>
             </Card>
 
+            {visibleResults.length === 0 && (
+              <Card className="p-8 text-center dark:bg-gray-800 dark:border-gray-700">
+                {/* Empty scraper/provider responses need a clear recovery path
+                    instead of an empty grid and a misleading zero-dollar total. */}
+                <AlertCircle className="size-10 text-amber-500 mx-auto mb-3" />
+                <h2 className="text-xl dark:text-white">No matching store prices found</h2>
+                <p className="mt-2 text-gray-600 dark:text-gray-400">
+                  Try broader item names such as “milk” or “bread,” or report a recent local price.
+                </p>
+              </Card>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {visibleResults.map((storeResult) => {
-                const extraCost = storeResult.total_cost - (cheapestStore?.total_cost ?? storeResult.total_cost);
+                // Price differences are only meaningful against the best basket
+                // with the same highest item coverage.
+                const extraCost = storeResult.available_count === bestBasketStore?.available_count
+                  ? storeResult.total_cost - bestBasketStore.total_cost
+                  : 0;
 
                 return (
                   <Card

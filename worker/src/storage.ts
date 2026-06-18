@@ -13,7 +13,15 @@ export async function loadSnapshot(
 
   if (stored) {
     try {
-      return removeExpiredOpenData(validateSnapshot(stored));
+      const snapshot = removeExpiredOpenData(validateSnapshot(stored));
+      if (shouldRenewEstimateSnapshot(snapshot)) {
+        // Static estimates do not become more accurate with age, but renewing
+        // their cache window prevents the UI from presenting them as failed live data.
+        const renewedSnapshot = renewEstimateSnapshot(snapshot);
+        ctx?.waitUntil(saveSnapshot(env, renewedSnapshot));
+        return renewedSnapshot;
+      }
+      return snapshot;
     } catch (error) {
       console.error(JSON.stringify({
         message: 'invalid cached snapshot',
@@ -42,4 +50,22 @@ export async function saveSnapshot(env: Env, snapshot: PriceSnapshot): Promise<v
       },
     },
   );
+}
+
+function shouldRenewEstimateSnapshot(snapshot: PriceSnapshot, now = new Date()): boolean {
+  // Only seed/community estimate snapshots are renewable. A stale provider
+  // snapshot must remain visibly stale until its upstream feed succeeds again.
+  return Date.parse(snapshot.expires_at) <= now.getTime()
+    && snapshot.data_source === 'estimate'
+    && snapshot.products.every((product) =>
+      product.source_kind === 'estimate' || product.source_kind === 'community'
+    );
+}
+
+function renewEstimateSnapshot(snapshot: PriceSnapshot, now = new Date()): PriceSnapshot {
+  return {
+    ...snapshot,
+    generated_at: now.toISOString(),
+    expires_at: new Date(now.getTime() + 6 * 60 * 60 * 1000).toISOString(),
+  };
 }

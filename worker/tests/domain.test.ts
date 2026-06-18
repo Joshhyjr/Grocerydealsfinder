@@ -30,6 +30,37 @@ describe('cached grocery domain', () => {
     expect(response.stores.find((store) => store.is_best_price)?.store).toBe('No Frills');
   });
 
+  it('prefers a live provider match over a cheaper estimate alias', () => {
+    const snapshot = createSeedSnapshot();
+    const estimate = snapshot.products.find((product) =>
+      product.store_id === 'nofrills-hfx' && product.name === 'Milk'
+    );
+    if (!estimate) {
+      throw new Error('Expected the No Frills milk seed fixture.');
+    }
+
+    // A provider may use a more specific product name, so alias matching must
+    // still prevent the fallback estimate from masking the live observation.
+    snapshot.products.push({
+      ...estimate,
+      id: 'provider-nofrills-2-percent-milk',
+      name: '2% Milk',
+      aliases: ['milk', '2% milk'],
+      price: estimate.price + 1,
+      source: 'test-provider',
+      source_kind: 'provider',
+      observed_at: '2026-06-18',
+    });
+
+    const response = basketSnapshot(snapshot, ['milk'], 'B3H2Y7');
+    const noFrillsMilk = response.stores
+      .find((store) => store.store_id === 'nofrills-hfx')
+      ?.breakdown[0];
+
+    expect(noFrillsMilk?.name).toBe('2% Milk');
+    expect(noFrillsMilk?.source_kind).toBe('provider');
+  });
+
   it('rejects malformed uploaded prices', () => {
     const snapshot = createSeedSnapshot();
     snapshot.products[0].price = -1;
