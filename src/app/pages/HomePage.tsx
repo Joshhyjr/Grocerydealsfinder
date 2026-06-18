@@ -46,8 +46,8 @@ export function HomePage() {
     }
   };
 
-  // Live backend suggestions make the input reflect the same product catalogue
-  // that powers the final comparison results instead of the old mock dataset.
+  // Suggestions prefer the live service and fall back to the bundled catalogue,
+  // matching the same resilient path used by the final comparison.
   useEffect(() => {
     if (!searchQuery.trim()) {
       return;
@@ -192,7 +192,7 @@ export function HomePage() {
                     </div>
                   )}
                   {isLoadingSuggestions && (
-                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">Loading live suggestions...</p>
+                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">Loading suggestions...</p>
                   )}
                 </div>
 

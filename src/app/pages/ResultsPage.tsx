@@ -15,8 +15,42 @@ import {
 } from '../components/ui/dialog';
 import { ArrowLeft, ShoppingCart, Check, X, MapPin, Save, Moon, Sun, LoaderCircle, AlertCircle, Navigation } from 'lucide-react';
 import { useGrocery } from '../context/GroceryContext';
-import { BasketResponseData, BasketStoreResult, fetchBasketResults, normalizePostalCode } from '../data/api';
+import {
+  BasketBreakdownItem,
+  BasketResponseData,
+  BasketStoreResult,
+  fetchBasketResults,
+  isCommunityReportingAvailable,
+  normalizePostalCode,
+} from '../data/api';
 import { toast } from 'sonner';
+import { CommunityPriceDialog } from '../components/CommunityPriceDialog';
+
+function PriceSource({ source }: { source: BasketBreakdownItem }) {
+  const sourceLabel = source.source_kind === 'community'
+    ? 'Community report'
+    : source.source_kind === 'open-prices'
+      ? 'Open Prices'
+      : source.source_kind === 'estimate'
+        ? 'Estimate'
+        : source.source;
+  const observedLabel = source.observed_at
+    ? ` · observed ${new Date(`${source.observed_at}T12:00:00`).toLocaleDateString()}`
+    : '';
+
+  // Attribution stays adjacent to the price so open and estimated data cannot
+  // be mistaken for a retailer-guaranteed current price.
+  return (
+    <p className="text-xs text-blue-600 dark:text-blue-400">
+      {source.attribution_url ? (
+        <a href={source.attribution_url} target="_blank" rel="noreferrer" className="underline">
+          {sourceLabel}
+        </a>
+      ) : sourceLabel}
+      {observedLabel}
+    </p>
+  );
+}
 
 export function ResultsPage() {
   const [searchParams] = useSearchParams();
@@ -30,9 +64,10 @@ export function ResultsPage() {
   const [basketData, setBasketData] = useState<BasketResponseData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
 
-  // Live basket data comes from the FastAPI backend so the results page reflects
-  // the real scrapers instead of the old static inventory snapshot.
+  // The data client prefers the live API and transparently supplies a labelled
+  // estimate when the scraper service is unavailable.
   useEffect(() => {
     if (currentList.length === 0) {
       setBasketData(null);
@@ -61,7 +96,7 @@ export function ResultsPage() {
 
     loadBasket();
     return () => controller.abort();
-  }, [currentList, postalCode]);
+  }, [currentList, postalCode, refreshVersion]);
 
   const sortedResults = useMemo(() => basketData?.stores ?? [], [basketData]);
   const visibleResults = useMemo(() => {
@@ -98,6 +133,7 @@ export function ResultsPage() {
         price: matchedItem.price,
         priceStr: matchedItem.price_str,
         unitPrice: matchedItem.unit_price,
+        source: matchedItem,
       };
     }
 
@@ -107,6 +143,7 @@ export function ResultsPage() {
       price: null,
       priceStr: null,
       unitPrice: null,
+      source: null,
     };
   }
 
@@ -177,6 +214,13 @@ export function ResultsPage() {
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
+              {isCommunityReportingAvailable && (
+                <CommunityPriceDialog
+                  items={currentList}
+                  postalCode={postalCode}
+                  onSubmitted={() => setRefreshVersion((version) => version + 1)}
+                />
+              )}
               <Button
                 onClick={() => navigate(`/map?budget=${budget}&postalCode=${postalCode}`)}
                 className="bg-green-600 hover:bg-green-700 text-white"
@@ -191,7 +235,7 @@ export function ResultsPage() {
 
       <section className="max-w-7xl mx-auto px-6 py-12">
         <div className="text-center mb-12">
-          <h1 className="text-4xl mb-3 dark:text-white">Live Basket Results</h1>
+          <h1 className="text-4xl mb-3 dark:text-white">Basket Price Results</h1>
           <p className="text-gray-600 dark:text-gray-400">
             Comparing {currentList.length} items for postal code {postalCode}.
           </p>
@@ -200,7 +244,7 @@ export function ResultsPage() {
         {isLoading && (
           <div className="flex items-center justify-center py-16 text-gray-600 dark:text-gray-400">
             <LoaderCircle className="size-5 mr-2 animate-spin" />
-            Loading live grocery prices...
+            Loading grocery prices...
           </div>
         )}
 
@@ -217,6 +261,25 @@ export function ResultsPage() {
 
         {!isLoading && !error && basketData && (
           <>
+            {/* Estimate mode is intentionally prominent so fallback prices are
+                useful without being mistaken for current advertised prices. */}
+            {(basketData.data_source === 'estimate' || basketData.snapshot_stale) && (
+              <Card className="mb-8 border-amber-300 bg-amber-50 p-5 dark:border-amber-800 dark:bg-amber-950/30">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="mt-0.5 size-5 shrink-0 text-amber-600" />
+                  <div>
+                    <p className="font-medium text-amber-900 dark:text-amber-200">
+                      {basketData.snapshot_stale ? 'Showing the last cached prices' : 'Showing catalogue estimates'}
+                    </p>
+                    <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
+                      {basketData.snapshot_stale
+                        ? 'The latest refresh has expired, so these are the last successfully cached prices. Verify prices before shopping.'
+                        : 'Some items use sample estimates because no recent open or community price exists. Check each item’s source before shopping.'}
+                    </p>
+                  </div>
+                </div>
+              </Card>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
               <Card className="p-5 dark:bg-gray-800 dark:border-gray-700">
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Nearest Store</p>
@@ -252,7 +315,7 @@ export function ResultsPage() {
                 <div>
                   <h2 className="text-xl dark:text-white">Active Shopping List</h2>
                   <p className="text-sm text-gray-500 dark:text-gray-400">
-                    Remove items here to rerun the live basket without touching your saved templates.
+                    Remove items here to rerun the basket without touching your saved templates.
                   </p>
                 </div>
               </div>
@@ -330,6 +393,9 @@ export function ResultsPage() {
                                 </span>
                                 {item.available && item.unitPrice && (
                                   <p className="text-xs text-gray-500 dark:text-gray-400">{item.unitPrice}</p>
+                                )}
+                                {item.available && item.source && (
+                                  <PriceSource source={item.source} />
                                 )}
                               </div>
                             </div>

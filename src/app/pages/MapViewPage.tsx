@@ -3,7 +3,7 @@ import { useSearchParams, useNavigate } from 'react-router';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
-import { ArrowLeft, ExternalLink, List, ShoppingCart, Check, X, Moon, Sun, LoaderCircle, MapPin, Navigation } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ExternalLink, List, ShoppingCart, Check, X, Moon, Sun, LoaderCircle, MapPin, Navigation } from 'lucide-react';
 import { useGrocery } from '../context/GroceryContext';
 import { BasketResponseData, fetchBasketResults, normalizePostalCode } from '../data/api';
 
@@ -19,9 +19,8 @@ export function MapViewPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // This page now uses the live backend too. The current backend does not yet
-  // expose precise store coordinates, so the page acts as a live store explorer
-  // until geographic metadata is added to the API.
+  // The shared data client keeps this explorer available in both live and
+  // explicitly labelled estimate modes.
   useEffect(() => {
     if (currentList.length === 0) {
       setBasketData(null);
@@ -135,7 +134,13 @@ export function MapViewPage() {
           <div className="lg:col-span-1 space-y-4">
             <div>
               <h2 className="text-2xl mb-2 dark:text-white">Store Explorer</h2>
-              <p className="text-sm text-gray-600 dark:text-gray-400">Live comparison data for {postalCode}</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                {basketData?.snapshot_stale
+                  ? 'Cached'
+                  : basketData?.data_source === 'estimate'
+                    ? 'Estimated'
+                    : 'Live'} comparison data for {postalCode}
+              </p>
             </div>
 
             {isLoading && (
@@ -203,6 +208,20 @@ export function MapViewPage() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* Mirror the results-page disclosure anywhere estimated prices appear. */}
+            {(basketData?.data_source === 'estimate' || basketData?.snapshot_stale) && (
+              <Card className="border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30">
+                <CardContent className="flex items-start gap-3 p-5">
+                  <AlertCircle className="mt-0.5 size-5 shrink-0 text-amber-600" />
+                  <p className="text-sm text-amber-800 dark:text-amber-300">
+                    {basketData.snapshot_stale
+                      ? 'The latest refresh expired, so store totals use the last successful cached prices. Confirm prices before shopping.'
+                      : 'Live prices are unavailable, so store totals use bundled catalogue estimates. Confirm prices before shopping.'}
+                  </p>
+                </CardContent>
+              </Card>
+            )}
 
             <Card className="dark:bg-gray-800 dark:border-gray-700 overflow-hidden">
               <CardContent className="p-0">
@@ -292,6 +311,20 @@ export function MapViewPage() {
                               </p>
                               {match?.unit_price && (
                                 <p className="text-xs text-gray-500 dark:text-gray-400">{match.unit_price}</p>
+                              )}
+                              {match && (
+                                <p className="text-xs text-blue-600 dark:text-blue-400">
+                                  {match.source_kind === 'community'
+                                    ? 'Community report'
+                                    : match.source_kind === 'open-prices'
+                                      ? 'Open Prices'
+                                      : match.source_kind === 'estimate'
+                                        ? 'Estimate'
+                                        : match.source}
+                                  {match.observed_at
+                                    ? ` · observed ${new Date(`${match.observed_at}T12:00:00`).toLocaleDateString()}`
+                                    : ''}
+                                </p>
                               )}
                             </div>
                           </div>
